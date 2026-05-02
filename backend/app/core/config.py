@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_SECRET: Optional[str] = None
     FACEBOOK_CLIENT_ID: Optional[str] = None
     FACEBOOK_CLIENT_SECRET: Optional[str] = None
+    # Native sign-in (mobile) audience whitelist
+    APPLE_BUNDLE_ID: Optional[str] = None  # e.g. com.selmapp.app (iOS aud)
+    APPLE_SERVICE_ID: Optional[str] = None  # web/Android aud (services id)
+    GOOGLE_IOS_CLIENT_ID: Optional[str] = None
+    GOOGLE_ANDROID_CLIENT_ID: Optional[str] = None
     OAUTH_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/callback"
     
     # PayPal Settings

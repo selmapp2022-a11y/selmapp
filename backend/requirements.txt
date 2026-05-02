@@ -57,3 +57,7 @@ paypalrestsdk==1.13.3
 # NOTE: python-paypal-api removed (the version pinned in code does not exist on
 # PyPI; paypal_service.py now lazy-imports it and the app falls back gracefully).
 # RevenueCat is the going-forward billing system.
+
+# Native mobile sign-in (Google ID token + Apple)
+google-auth==2.34.0
+PyJWT[crypto]==2.9.0

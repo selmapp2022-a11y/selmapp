@@ -249,6 +249,210 @@ class ElevenLabsTTSService:
             logger.error(f"ElevenLabs TTS generation failed: {e}", exc_info=True)
             return {"success": False, "error": str(e), "fallback_available": True}
 
+    # ---------------------------------------------------------- multi-speaker
+
+    # Distinct, high-quality voices for two-speaker conversations.
+    # Female defaults match single-voice path (Sarah/Charlotte) so existing
+    # listening exercises with one speaker keep their familiar voice.
+    _MULTI_SPEAKER_VOICES = {
+        "american": {
+            "female": "EXAVITQu4vr4xnSDxMaL",  # Sarah
+            "male": "nPczCjzI2devNBz1zQrb",    # Brian – warm American male
+        },
+        "british": {
+            "female": "XB0fDUnXU5powFXDhCwa",  # Charlotte
+            "male": "JBFqnCBsd6RMkjVDRZzb",    # George – mature British male
+        },
+    }
+
+    _MULTI_SPEAKER_VOICE_LABELS = {
+        "EXAVITQu4vr4xnSDxMaL": "Sarah",
+        "nPczCjzI2devNBz1zQrb": "Brian",
+        "XB0fDUnXU5powFXDhCwa": "Charlotte",
+        "JBFqnCBsd6RMkjVDRZzb": "George",
+    }
+
+    def _assign_voices_for_speakers(
+        self,
+        speaker_names: List[str],
+        accent: str,
+    ) -> Dict[str, str]:
+        """Deterministic map of speaker_name -> voice_id, alternating female/male."""
+        accent_key = "british" if accent == "british" else "american"
+        pool = self._MULTI_SPEAKER_VOICES[accent_key]
+        # First distinct speaker -> female, second -> male, then cycle.
+        order = ["female", "male"]
+        mapping: Dict[str, str] = {}
+        seen_order: List[str] = []
+        for name in speaker_names:
+            if name not in mapping:
+                gender = order[len(seen_order) % len(order)]
+                mapping[name] = pool[gender]
+                seen_order.append(name)
+        return mapping
+
+    async def _synthesize_pcm(
+        self,
+        text: str,
+        voice_id: str,
+        voice_settings: Optional[Dict[str, Any]] = None,
+    ) -> Optional[bytes]:
+        """Single ElevenLabs TTS call returning raw 24 kHz PCM bytes (no WAV header)."""
+        if not self.api_key or not text or not text.strip():
+            return None
+        vs = voice_settings or {}
+        body = {
+            "text": text,
+            "model_id": vs.get("model_id") or self.model_id,
+            "voice_settings": {
+                "stability": float(vs.get("stability", 0.45)),
+                "similarity_boost": float(vs.get("similarity_boost", 0.75)),
+                "style": float(vs.get("style", 0.0)),
+                "use_speaker_boost": bool(vs.get("use_speaker_boost", True)),
+            },
+        }
+        url = (
+            f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}"
+            f"?output_format=pcm_24000"
+        )
+        headers = {
+            "xi-api-key": self.api_key,
+            "accept": "audio/wav",
+            "content-type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for attempt in range(3):
+                try:
+                    resp = await client.post(url, headers=headers, json=body)
+                    if resp.status_code == 200:
+                        return resp.content
+                    if 400 <= resp.status_code < 500:
+                        logger.error(
+                            f"ElevenLabs HTTP {resp.status_code} on multi-speaker turn: "
+                            f"{resp.text[:200] if resp.text else 'no body'}"
+                        )
+                        return None
+                except httpx.HTTPError as e:
+                    logger.warning(f"ElevenLabs turn attempt {attempt+1} failed: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1 * (attempt + 1))
+        return None
+
+    async def generate_multi_speaker_audio(
+        self,
+        turns: List[Dict[str, str]],
+        audio_type: str = "conversation",
+        accent: str = "american",
+        voice_settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Generate a single audio file with distinct voices per speaker.
+
+        Args:
+            turns: List of {"speaker": str, "text": str} in script order.
+            audio_type: For metadata (conversation/interview/etc).
+            accent: "american" or "british" – picks the female/male voice pair.
+            voice_settings: Optional ElevenLabs voice settings overrides.
+
+        Returns the same dict shape as generate_audio_content with extra
+        "voice_assignments" mapping speaker_name -> voice_label.
+        """
+        if not self.api_key:
+            return {"success": False, "error": "ElevenLabs API key not configured", "fallback_available": True}
+        if not turns:
+            return {"success": False, "error": "No turns provided", "fallback_available": False}
+
+        accent_norm = (accent or "american").lower()
+        if accent_norm not in self._MULTI_SPEAKER_VOICES:
+            accent_norm = "american"
+
+        speaker_order = [t.get("speaker", "Speaker") for t in turns]
+        voice_map = self._assign_voices_for_speakers(speaker_order, accent_norm)
+
+        # Synthesize each turn in order. ~300ms silence between turns at 24 kHz / 16-bit mono.
+        silence_between = b"\x00" * (24000 * 2 * 300 // 1000)
+        pcm_chunks: List[bytes] = []
+        for idx, turn in enumerate(turns):
+            speaker = turn.get("speaker", "Speaker")
+            text = (turn.get("text") or "").strip()
+            if not text:
+                continue
+            voice_id = voice_map.get(speaker) or self._MULTI_SPEAKER_VOICES[accent_norm]["female"]
+            pcm = await self._synthesize_pcm(text, voice_id, voice_settings)
+            if pcm is None:
+                return {
+                    "success": False,
+                    "error": f"ElevenLabs TTS failed on turn {idx+1} (speaker {speaker})",
+                    "fallback_available": True,
+                }
+            pcm_chunks.append(pcm)
+            if idx < len(turns) - 1:
+                pcm_chunks.append(silence_between)
+
+        if not pcm_chunks:
+            return {"success": False, "error": "All turns were empty", "fallback_available": False}
+
+        merged_pcm = b"".join(pcm_chunks)
+        wav_bytes = self._wrap_pcm_as_wav(merged_pcm, sample_rate=24000)
+        audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        unique_id = uuid.uuid4().hex[:8]
+        full_text = "\n".join(t.get("text", "") for t in turns)
+        text_hash = hashlib.md5(full_text.encode("utf-8")).hexdigest()[:8]
+        filename = f"elevenlabs_dialog_{timestamp}_{unique_id}_{text_hash}.wav"
+
+        storage_result = await audio_storage_service.store_audio(
+            audio_data=audio_b64,
+            filename=filename,
+            metadata={
+                "audio_type": audio_type,
+                "accent": accent_norm,
+                "speakers": speaker_order,
+                "voice_assignments": {
+                    name: self._MULTI_SPEAKER_VOICE_LABELS.get(vid, vid)
+                    for name, vid in voice_map.items()
+                },
+                "generated_at": datetime.utcnow().isoformat(),
+                "tts_engine": self.model_id,
+                "api": "elevenlabs",
+                "multi_speaker": True,
+            },
+        )
+
+        voice_assignments = {
+            name: self._MULTI_SPEAKER_VOICE_LABELS.get(vid, vid)
+            for name, vid in voice_map.items()
+        }
+        primary_voice = next(iter(voice_assignments.values()), None)
+
+        return {
+            "success": True,
+            "audio_url": storage_result["audio_url"],
+            "filename": storage_result.get("filename", filename),
+            "audio_data": audio_b64,
+            "duration_seconds": storage_result.get(
+                "duration_seconds", max(1.0, sum(len((t.get("text") or "").split()) for t in turns) * 0.4)
+            ),
+            "file_size": storage_result.get("file_size", len(wav_bytes)),
+            "speaker_count": len({s for s in speaker_order}),
+            "tts_model": self.model_id,
+            "voice": primary_voice,
+            "voice_id": next(iter(voice_map.values()), None),
+            "accent": accent_norm,
+            "provider": "elevenlabs",
+            "multi_speaker": True,
+            "voice_assignments": voice_assignments,
+            "metadata": {
+                "audio_type": audio_type,
+                "generated_at": datetime.utcnow().isoformat(),
+                "model": self.model_id,
+                "accent": accent_norm,
+                "voice_assignments": voice_assignments,
+                "api": "elevenlabs",
+                "multi_speaker": True,
+            },
+        }
+
 
 # Singleton accessor (same pattern as gemini_tts_service.get_tts_service)
 _elevenlabs_tts_instance: Optional[ElevenLabsTTSService] = None

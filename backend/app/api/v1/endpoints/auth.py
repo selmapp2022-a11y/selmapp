@@ -659,3 +659,163 @@ async def reset_password(
     await user_crud.update(db, db_obj=user, obj_in={"password": request.new_password})
     
     return {"message": "Password has been reset successfully"} 
+
+# --------------------------------------------------------------------
+# Native mobile sign-in (Google + Apple)
+# --------------------------------------------------------------------
+
+from pydantic import BaseModel as _BaseModel
+import jwt as _pyjwt
+from jwt import PyJWKClient as _PyJWKClient
+
+_APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+_APPLE_ISSUER = "https://appleid.apple.com"
+_GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+
+
+class GoogleNativeRequest(_BaseModel):
+    id_token: str
+
+
+class AppleNativeRequest(_BaseModel):
+    identity_token: str
+    full_name: str | None = None
+    email: str | None = None  # Apple only sends email on first sign-in
+
+
+def _build_native_token_response(user) -> dict:
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+    return {
+        "access_token": create_access_token(subject=user.id, expires_delta=access_token_expires),
+        "refresh_token": create_refresh_token(subject=user.id, expires_delta=refresh_token_expires),
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
+
+
+@router.post("/oauth/google/native", response_model=Token)
+async def oauth_google_native(
+    body: GoogleNativeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Verify a Google ID token from the mobile app and return our JWT.
+
+    The mobile app obtains the ID token via the native google_sign_in SDK
+    and posts it here. We verify with Google's tokeninfo endpoint, then
+    find/create the user and issue our own access/refresh tokens.
+    """
+    if not body.id_token:
+        raise HTTPException(status_code=400, detail="id_token required")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(_GOOGLE_TOKENINFO_URL, params={"id_token": body.id_token})
+        if r.status_code != 200:
+            raise HTTPException(status_code=401, detail=f"Google ID token invalid: {r.text[:200]}")
+        info = r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Google ID token verification failed: {e}")
+
+    # Verify audience matches one of our Google client IDs.
+    expected_auds = {
+        v for v in (
+            settings.GOOGLE_CLIENT_ID,
+            getattr(settings, "GOOGLE_IOS_CLIENT_ID", None),
+            getattr(settings, "GOOGLE_ANDROID_CLIENT_ID", None),
+        ) if v
+    }
+    if expected_auds and info.get("aud") not in expected_auds:
+        raise HTTPException(status_code=401, detail=f"Google audience mismatch: {info.get('aud')}")
+    if info.get("iss") not in ("https://accounts.google.com", "accounts.google.com"):
+        raise HTTPException(status_code=401, detail=f"Google issuer invalid: {info.get('iss')}")
+    if not info.get("email"):
+        raise HTTPException(status_code=400, detail="Google profile missing email")
+
+    user_info = {
+        "id": info.get("sub"),
+        "email": info.get("email"),
+        "name": info.get("name") or info.get("email", "").split("@")[0],
+        "picture": info.get("picture", ""),
+    }
+    auth_result = await oauth2_service.authenticate_with_user_info(
+        provider="google", user_info=user_info, db=db,
+    )
+    user = auth_result["user"]
+    await user_crud.update_last_login(db, user_id=user.id)
+    return _build_native_token_response(user)
+
+
+@router.post("/oauth/apple/native", response_model=Token)
+async def oauth_apple_native(
+    body: AppleNativeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Verify an Apple identity_token from the mobile app and return our JWT.
+
+    Verification: fetch Apple's JWKS, validate signature + iss + aud + exp.
+    Audience must match APPLE_BUNDLE_ID (iOS) or APPLE_SERVICE_ID (web).
+    """
+    if not body.identity_token:
+        raise HTTPException(status_code=400, detail="identity_token required")
+    expected_auds = {
+        v for v in (
+            getattr(settings, "APPLE_BUNDLE_ID", None),
+            getattr(settings, "APPLE_SERVICE_ID", None),
+        ) if v
+    }
+    if not expected_auds:
+        raise HTTPException(
+            status_code=503,
+            detail="Apple sign-in not configured (set APPLE_BUNDLE_ID).",
+        )
+    try:
+        jwk_client = _PyJWKClient(_APPLE_JWKS_URL)
+        signing_key = jwk_client.get_signing_key_from_jwt(body.identity_token)
+        # PyJWT verifies signature, exp, iss, aud automatically.
+        claims = _pyjwt.decode(
+            body.identity_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=list(expected_auds),
+            issuer=_APPLE_ISSUER,
+        )
+    except _pyjwt.PyJWTError as e:
+        raise HTTPException(status_code=401, detail=f"Apple identity_token invalid: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Apple verification failed: {e}")
+
+    sub = claims.get("sub")
+    if not sub:
+        raise HTTPException(status_code=400, detail="Apple token missing subject")
+
+    # Apple only returns email on the very first sign-in. Use cached email
+    # from the user record on subsequent sign-ins; otherwise fall back to
+    # the proxy email from the token, then to the body field.
+    email = claims.get("email") or body.email or ""
+    name = body.full_name or ""
+
+    user_info = {
+        "sub": sub,
+        "email": email,
+        "name": name,
+    }
+    try:
+        auth_result = await oauth2_service.authenticate_with_user_info(
+            provider="apple", user_info=user_info, db=db,
+        )
+    except HTTPException as e:
+        # Most common: missing email on first sign-in for an account that
+        # the iOS device chose to hide. Surface a clear actionable message.
+        if "email" in str(e.detail).lower():
+            raise HTTPException(
+                status_code=400,
+                detail="Apple sign-in needs your email on first sign-in. "
+                       "Please choose Share My Email and try again.",
+            )
+        raise
+    user = auth_result["user"]
+    await user_crud.update_last_login(db, user_id=user.id)
+    return _build_native_token_response(user)

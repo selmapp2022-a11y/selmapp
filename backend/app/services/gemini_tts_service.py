@@ -26,6 +26,46 @@ from app.services.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_script_into_turns(script: str, speaker_names: List[str]) -> List[Dict[str, str]]:
+    """Parse a generated dialogue script into ordered (speaker, text) turns.
+
+    Accepts lines in either of these formats (LLM output may vary):
+        [Speaker Name]: dialogue text
+        Speaker Name: dialogue text
+
+    Lines that don't match a known speaker are appended to the most recent
+    turn so we don't drop content.
+    """
+    import re
+
+    if not script:
+        return []
+    known = [s for s in (speaker_names or []) if isinstance(s, str) and s.strip()]
+    # Match optional leading bracket, then name, then colon.
+    name_re = re.compile(r"^\s*\[?\s*([^\[\]:]{1,60}?)\s*\]?\s*:\s*(.+?)\s*$")
+    turns: List[Dict[str, str]] = []
+    for raw in script.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = name_re.match(line)
+        if m:
+            speaker_raw = m.group(1).strip()
+            text = m.group(2).strip()
+            # Resolve to a known speaker name when possible (case-insensitive).
+            resolved = next(
+                (k for k in known if k.lower() == speaker_raw.lower()),
+                speaker_raw,
+            )
+            turns.append({"speaker": resolved, "text": text})
+        elif turns:
+            turns[-1]["text"] = (turns[-1]["text"] + " " + line).strip()
+        else:
+            turns.append({"speaker": (known[0] if known else "Speaker"), "text": line})
+    return turns
+
+
 # Global singleton instance for thread-safe reuse
 _tts_service_instance: Optional["GeminiTTSService"] = None
 _tts_service_lock: Optional[asyncio.Lock] = None
@@ -307,13 +347,49 @@ class GeminiTTSService:
                     for s in speakers
                 ]
 
-            # Generate audio (ElevenLabs or Gemini, depending on TTS_PROVIDER)
-            audio_result = await self.generate_audio_content(
-                text=script,
-                audio_type=content_type,
-                speaker_config=speakers,
-                voice_settings={"accent": accent_norm} if accent_norm else None,
-            )
+            # For multi-speaker formats (conversation/interview) on ElevenLabs,
+            # synthesize each turn with a distinct voice (female + male) and
+            # concatenate. This produces a dialogue with two recognizable voices
+            # instead of a single voice reading both sides.
+            audio_result: Optional[Dict[str, Any]] = None
+            provider_pref = (getattr(settings, "TTS_PROVIDER", "gemini") or "gemini").lower()
+            if (
+                provider_pref == "elevenlabs"
+                and content_type in ("conversation", "interview")
+            ):
+                turns = _parse_script_into_turns(script, speaker_names)
+                if turns and len({t["speaker"] for t in turns}) >= 2:
+                    try:
+                        from app.services.elevenlabs_tts_service import (
+                            get_elevenlabs_tts_service,
+                        )
+                        el = await get_elevenlabs_tts_service()
+                        multi_result = await el.generate_multi_speaker_audio(
+                            turns=turns,
+                            audio_type=content_type,
+                            accent=(accent_norm or "american"),
+                            voice_settings=None,
+                        )
+                        if multi_result.get("success"):
+                            audio_result = multi_result
+                        else:
+                            logger.warning(
+                                "Multi-speaker ElevenLabs failed, falling back to "
+                                f"single-voice: {multi_result.get('error')}"
+                            )
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(
+                            f"Multi-speaker dispatch failed, falling back: {e}"
+                        )
+
+            # Single-voice path (or fallback): generate as one block.
+            if audio_result is None:
+                audio_result = await self.generate_audio_content(
+                    text=script,
+                    audio_type=content_type,
+                    speaker_config=speakers,
+                    voice_settings={"accent": accent_norm} if accent_norm else None,
+                )
 
             if not audio_result["success"]:
                 return audio_result

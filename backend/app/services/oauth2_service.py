@@ -194,6 +194,16 @@ class OAuth2Service:
             email = user_info.get("email", "")
             name = user_info.get("name", "")
             avatar_url = user_info.get("picture", {}).get("data", {}).get("url", "")
+        elif provider == "apple":
+            provider_user_id = str(user_info.get("sub") or user_info.get("id") or "")
+            email = user_info.get("email", "") or ""
+            name = user_info.get("name", "") or ""
+            avatar_url = ""
+            if not provider_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Apple sign-in: missing subject id"
+                )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -316,6 +326,24 @@ class OAuth2Service:
         
         await oauth2_account_crud.delete(db, id=oauth_account.id)
         return True
+
+
+    async def authenticate_with_user_info(
+        self,
+        provider: str,
+        user_info: Dict[str, Any],
+        db: AsyncSession,
+    ) -> Dict[str, Any]:
+        """Find/create a user from already-verified ID token claims.
+
+        Used by the mobile native sign-in endpoints, which verify the
+        provider ID token themselves and then hand the verified claims
+        to the OAuth2 service for user resolution.
+        """
+        # Token data is empty/synthetic for native flows — we trust the verified claims only.
+        token_data = {"access_token": "", "refresh_token": "", "expires_in": 0}
+        user = await self._find_or_create_user(db, provider, user_info, token_data)
+        return {"user": user, "provider": provider, "token_data": token_data}
 
 # Create service instance
 oauth2_service = OAuth2Service() 

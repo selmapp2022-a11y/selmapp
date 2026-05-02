@@ -20,6 +20,7 @@ class OAuthProvider(str, enum.Enum):
     GOOGLE = "google"
     GITHUB = "github"
     FACEBOOK = "facebook"
+    APPLE = "apple"
 
 class OAuth2Account(Base):
     __tablename__ = "oauth2_accounts"

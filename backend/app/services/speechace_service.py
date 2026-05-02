@@ -14,8 +14,32 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _decode_to_wav_via_pydub(audio_bytes: bytes):
+    """Best-effort decode of any container (m4a, aac, mp3, webm, ogg) to WAV."""
+    try:
+        from pydub import AudioSegment
+        seg = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        seg = seg.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        out = io.BytesIO()
+        seg.export(out, format="wav")
+        return out.getvalue()
+    except Exception as e:
+        logger.warning(f"pydub decode failed: {e}")
+        return None
+
+
 def _normalize_wav_for_speechace(audio_bytes: bytes) -> bytes:
-    """Convert any WAV to 16-bit / 16 kHz / mono PCM so SpeechAce accepts it."""
+    """Convert any WAV to 16-bit / 16 kHz / mono PCM so SpeechAce accepts it.
+
+    If bytes are not a valid WAV (mobile recordings often arrive as AAC/M4A
+    even when client requested WAV), fall back to pydub for re-encoding.
+    """
+    if not audio_bytes.startswith(b'RIFF'):
+        decoded = _decode_to_wav_via_pydub(audio_bytes)
+        if decoded:
+            audio_bytes = decoded
+        else:
+            return audio_bytes
     try:
         with wave.open(io.BytesIO(audio_bytes), 'rb') as src:
             n_channels = src.getnchannels()
