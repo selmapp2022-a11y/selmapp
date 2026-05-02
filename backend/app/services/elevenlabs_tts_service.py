@@ -133,6 +133,8 @@ class ElevenLabsTTSService:
         filename = f"elevenlabs_tts_{timestamp}_{unique_id}_{text_hash}.wav"
 
         # Voice tuning: allow caller overrides, otherwise pleasant defaults.
+        # `speed` defaults to 0.9 to make listening exercises slightly slower
+        # and easier to follow for English learners.
         vs = voice_settings or {}
         body = {
             "text": text,
@@ -142,6 +144,7 @@ class ElevenLabsTTSService:
                 "similarity_boost": float(vs.get("similarity_boost", 0.75)),
                 "style": float(vs.get("style", 0.0)),
                 "use_speaker_boost": bool(vs.get("use_speaker_boost", True)),
+                "speed": float(vs.get("speed", 0.9)),
             },
         }
 
@@ -251,25 +254,38 @@ class ElevenLabsTTSService:
 
     # ---------------------------------------------------------- multi-speaker
 
-    # Distinct, high-quality voices for two-speaker conversations.
-    # Female defaults match single-voice path (Sarah/Charlotte) so existing
-    # listening exercises with one speaker keep their familiar voice.
-    _MULTI_SPEAKER_VOICES = {
-        "american": {
-            "female": "EXAVITQu4vr4xnSDxMaL",  # Sarah
-            "male": "nPczCjzI2devNBz1zQrb",    # Brian – warm American male
-        },
-        "british": {
-            "female": "XB0fDUnXU5powFXDhCwa",  # Charlotte
-            "male": "JBFqnCBsd6RMkjVDRZzb",    # George – mature British male
-        },
+    # Rich pool of ElevenLabs premade voices, all North American English.
+    # Used to give listening exercises maximum voice variety: each new
+    # conversation gets a deterministically-rotated pair so users hear
+    # many different characters across the app.
+    _FEMALE_VOICES: List[Dict[str, str]] = [
+        {"id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah",    "accent": "american"},
+        {"id": "XrExE9yKIg1WjnnlVkGX", "name": "Matilda",  "accent": "american"},
+        {"id": "cgSgspJ2msm6clMCkdW9", "name": "Jessica",  "accent": "american"},
+        {"id": "jsCqWAovK2LkecY7zXl4", "name": "Freya",    "accent": "american"},
+        {"id": "pFZP5JQG7iQjIQuC4Bku", "name": "Lily",     "accent": "american"},
+        {"id": "21m00Tcm4TlvDq8ikWAM", "name": "Rachel",   "accent": "american"},
+    ]
+    _MALE_VOICES: List[Dict[str, str]] = [
+        {"id": "nPczCjzI2devNBz1zQrb", "name": "Brian",    "accent": "american"},
+        {"id": "pqHfZKP75CvOlQylNhV4", "name": "Bill",     "accent": "american"},
+        {"id": "TX3LPaxmHKxFdv7VOQHJ", "name": "Liam",     "accent": "american"},
+        {"id": "pNInz6obpgDQGcFmaJgB", "name": "Adam",     "accent": "american"},
+        {"id": "cjVigY5qzO86Huf0OWal", "name": "Eric",     "accent": "american"},
+        {"id": "CwhRBWXzGAHq8TQ4Fs17", "name": "Roger",    "accent": "american"},
+    ]
+
+    # Backwards-compat: lookup of voice_id -> friendly name (used in metadata).
+    _MULTI_SPEAKER_VOICE_LABELS: Dict[str, str] = {
+        v["id"]: v["name"] for v in (_FEMALE_VOICES + _MALE_VOICES)
     }
 
-    _MULTI_SPEAKER_VOICE_LABELS = {
-        "EXAVITQu4vr4xnSDxMaL": "Sarah",
-        "nPczCjzI2devNBz1zQrb": "Brian",
-        "XB0fDUnXU5powFXDhCwa": "Charlotte",
-        "JBFqnCBsd6RMkjVDRZzb": "George",
+    # Backwards-compat: keep accent-keyed dict so callers that reference it
+    # still work. We point both "american" and "british" at the American pool
+    # because product decision is to use American/Canadian English only.
+    _MULTI_SPEAKER_VOICES: Dict[str, Dict[str, str]] = {
+        "american": {"female": _FEMALE_VOICES[0]["id"], "male": _MALE_VOICES[0]["id"]},
+        "british":  {"female": _FEMALE_VOICES[0]["id"], "male": _MALE_VOICES[0]["id"]},
     }
 
     def _assign_voices_for_speakers(
@@ -277,18 +293,36 @@ class ElevenLabsTTSService:
         speaker_names: List[str],
         accent: str,
     ) -> Dict[str, str]:
-        """Deterministic map of speaker_name -> voice_id, alternating female/male."""
-        accent_key = "british" if accent == "british" else "american"
-        pool = self._MULTI_SPEAKER_VOICES[accent_key]
-        # First distinct speaker -> female, second -> male, then cycle.
+        """Deterministic map of speaker_name -> voice_id, alternating female/male.
+
+        Rotates through the full female/male pools using a hash of the
+        speaker_names tuple so different conversations get different voices,
+        while the same conversation always renders identically (cache-friendly).
+        """
+        # Stable seed from the conversation's speakers (order-sensitive).
+        seed_str = "|".join(speaker_names)
+        seed = int(hashlib.md5(seed_str.encode("utf-8")).hexdigest()[:8], 16)
+        female_start = seed % len(self._FEMALE_VOICES)
+        male_start = (seed >> 4) % len(self._MALE_VOICES)
+
         order = ["female", "male"]
         mapping: Dict[str, str] = {}
-        seen_order: List[str] = []
+        seen: List[str] = []
         for name in speaker_names:
             if name not in mapping:
-                gender = order[len(seen_order) % len(order)]
-                mapping[name] = pool[gender]
-                seen_order.append(name)
+                gender = order[len(seen) % len(order)]
+                if gender == "female":
+                    voice = self._FEMALE_VOICES[
+                        (female_start + sum(1 for g in seen if g == "female"))
+                        % len(self._FEMALE_VOICES)
+                    ]["id"]
+                else:
+                    voice = self._MALE_VOICES[
+                        (male_start + sum(1 for g in seen if g == "male"))
+                        % len(self._MALE_VOICES)
+                    ]["id"]
+                mapping[name] = voice
+                seen.append(gender)
         return mapping
 
     async def _synthesize_pcm(
@@ -309,6 +343,7 @@ class ElevenLabsTTSService:
                 "similarity_boost": float(vs.get("similarity_boost", 0.75)),
                 "style": float(vs.get("style", 0.0)),
                 "use_speaker_boost": bool(vs.get("use_speaker_boost", True)),
+                "speed": float(vs.get("speed", 0.9)),
             },
         }
         url = (
