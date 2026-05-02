@@ -354,6 +354,18 @@ class GeminiTTSService:
                     })
                 return normalized
 
+            # Echo provider/accent/voice from the underlying TTS so clients can
+            # show the right label (e.g. "British accent — Charlotte").
+            _provider = audio_result.get("provider") or (
+                "elevenlabs" if str(audio_result.get("tts_model", "")).startswith("eleven") else "gemini"
+            )
+            _voice = (
+                audio_result.get("voice")
+                or audio_result.get("voice_name")
+                or (speakers[0].get("voice_name") if speakers and isinstance(speakers[0], dict) else None)
+            )
+            _accent = audio_result.get("accent") or accent_norm
+
             return {
                 "success": True,
                 "topic": topic,
@@ -364,13 +376,19 @@ class GeminiTTSService:
                 "audio_url": audio_result["audio_url"],
                 "audio_data": audio_result["audio_data"],
                 "duration_seconds": audio_result["duration_seconds"],
+                "audio_provider": _provider,
+                "accent": _accent,
+                "voice": _voice,
                 "comprehension_questions": _normalize_questions(script_result.get("comprehension_questions", [])),
                 "vocabulary_focus": script_result.get("vocabulary_focus", []),
                 "metadata": {
-                    "tts_model": settings.GEMINI_SPEECH_MODEL,
+                    "tts_model": audio_result.get("tts_model") or settings.GEMINI_SPEECH_MODEL,
                     "generated_at": datetime.utcnow().isoformat(),
                     "speaker_count": len(speakers),
-                    "api": "google-genai"
+                    "api": audio_result.get("api") or "google-genai",
+                    "provider": _provider,
+                    "accent": _accent,
+                    "voice": _voice,
                 }
             }
 

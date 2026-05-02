@@ -152,6 +152,9 @@ async def generate_listening_exercise(
                     "vocabulary": result.get("vocabulary_focus", []),
                     "speakers": result.get("speakers", []),
                     "content_type": content_type,
+                    "audio_provider": result.get("audio_provider"),
+                    "accent": result.get("accent") or accent,
+                    "voice": result.get("voice"),
                     "points": 30
                 },
                 "metadata": {
