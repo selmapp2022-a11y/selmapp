@@ -2,8 +2,16 @@ from typing import Dict, Any, Optional, List
 from decimal import Decimal
 from datetime import datetime, timedelta
 import logging
-from python_paypal_api.api import Orders, Transactions
-from python_paypal_api.base import PaypalApiException
+try:
+    from python_paypal_api.api import Orders, Transactions
+    from python_paypal_api.base import PaypalApiException
+    _PAYPAL_AVAILABLE = True
+except ImportError:
+    Orders = None
+    Transactions = None
+    class PaypalApiException(Exception):
+        pass
+    _PAYPAL_AVAILABLE = False
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

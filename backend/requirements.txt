@@ -51,9 +51,8 @@ webrtcvad==2.0.10
 # Text analysis
 textstat==0.7.4
 
-# Payments
+# Payments (legacy PayPal SDK; kept for billing plan/agreement code paths)
 paypalrestsdk==1.13.3
-python-paypal-api==1.5.6
-
-# Optional: dataset import scripts (kept since scripts/ references it)
-kaggle==1.6.17
+# NOTE: python-paypal-api removed (the version pinned in code does not exist on
+# PyPI; paypal_service.py now lazy-imports it and the app falls back gracefully).
+# RevenueCat is the going-forward billing system.
