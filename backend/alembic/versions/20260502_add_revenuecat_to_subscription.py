@@ -28,6 +28,12 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _table_exists(table: str) -> bool:
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    return table in insp.get_table_names()
+
+
 def _existing_columns(table: str) -> set:
     bind = op.get_bind()
     insp = sa.inspect(bind)
@@ -35,6 +41,13 @@ def _existing_columns(table: str) -> set:
 
 
 def upgrade() -> None:
+    # Defensive: in some environments the `subscriptions` table was never
+    # created (the earlier payments migration was skipped). In that case
+    # we skip silently — the table will be created by its own migration
+    # later, including the columns added below.
+    if not _table_exists("subscriptions"):
+        return
+
     cols = _existing_columns("subscriptions")
 
     if "provider" not in cols:
