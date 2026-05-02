@@ -1,7 +1,10 @@
 import asyncio
+import audioop
 import base64
+import io
 import json
 import logging
+import wave
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -9,6 +12,38 @@ import aiohttp
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_wav_for_speechace(audio_bytes: bytes) -> bytes:
+    """Convert any WAV to 16-bit / 16 kHz / mono PCM so SpeechAce accepts it."""
+    try:
+        with wave.open(io.BytesIO(audio_bytes), 'rb') as src:
+            n_channels = src.getnchannels()
+            sample_width = src.getsampwidth()
+            framerate = src.getframerate()
+            n_frames = src.getnframes()
+            frames = src.readframes(n_frames)
+        if n_channels not in (1, 2) or sample_width not in (1, 2, 3, 4):
+            return audio_bytes
+        if n_channels == 2:
+            frames = audioop.tomono(frames, sample_width, 1, 1)
+        if sample_width != 2:
+            frames = audioop.lin2lin(frames, sample_width, 2)
+            sample_width = 2
+        target_rate = 16000
+        if framerate != target_rate:
+            frames, _ = audioop.ratecv(frames, sample_width, 1, framerate, target_rate, None)
+            framerate = target_rate
+        out = io.BytesIO()
+        with wave.open(out, 'wb') as dst:
+            dst.setnchannels(1)
+            dst.setsampwidth(sample_width)
+            dst.setframerate(framerate)
+            dst.writeframes(frames)
+        return out.getvalue()
+    except Exception as e:
+        logger.warning(f'WAV normalization for SpeechAce failed, sending original: {e}')
+        return audio_bytes
 
 
 class SpeechaceService:
@@ -105,7 +140,7 @@ class SpeechaceService:
             # Strategy: if reference_text exists, use text scoring; otherwise open-ended speech.
             if use_open_ended:
                 form = aiohttp.FormData()
-                form.add_field("user_audio_file", audio_bytes, filename="audio.wav", content_type="audio/wav")
+                form.add_field("user_audio_file", _normalize_wav_for_speechace(audio_bytes), filename="audio.wav", content_type="audio/wav")
                 if user_id:
                     form.add_field("user_id", user_id)
                 form.add_field("include_ielts_feedback", "0")
@@ -115,7 +150,7 @@ class SpeechaceService:
                 if (not primary.get("success")) and reference_text:
                     form_text = aiohttp.FormData()
                     form_text.add_field("text", reference_text)
-                    form_text.add_field("user_audio_file", audio_bytes, filename="audio.wav", content_type="audio/wav")
+                    form_text.add_field("user_audio_file", _normalize_wav_for_speechace(audio_bytes), filename="audio.wav", content_type="audio/wav")
                     if user_id:
                         form_text.add_field("user_id", user_id)
                     form_text.add_field("include_fluency", "true" if include_fluency else "false")
@@ -127,7 +162,7 @@ class SpeechaceService:
             else:
                 form_text = aiohttp.FormData()
                 form_text.add_field("text", reference_text)
-                form_text.add_field("user_audio_file", audio_bytes, filename="audio.wav", content_type="audio/wav")
+                form_text.add_field("user_audio_file", _normalize_wav_for_speechace(audio_bytes), filename="audio.wav", content_type="audio/wav")
                 if user_id:
                     form_text.add_field("user_id", user_id)
                 form_text.add_field("include_fluency", "true" if include_fluency else "false")
