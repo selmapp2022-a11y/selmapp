@@ -97,6 +97,7 @@ abstract class PracticeRepository {
     required String topic,
     String? level,
     String contentType,
+    String? accent,
   });
 
   /// Assess a grammar answer and get detailed AI feedback
@@ -705,14 +706,18 @@ class PracticeRepositoryImpl implements PracticeRepository {
     required String topic,
     String? level,
     String contentType = 'conversation',
+    String? accent,
     bool useCache = true,
   }) async {
-    // Check cache first
+    // Cache key includes accent so American/British versions are cached separately.
+    final accentKey = (accent ?? '').trim().toLowerCase();
+    final cacheKey = accentKey.isEmpty ? topic : '$topic::$accentKey';
+
     if (useCache) {
-      final cached = _cache.getGeneratedListening(topic);
+      final cached = _cache.getGeneratedListening(cacheKey);
       if (cached != null) {
         if (kDebugMode) {
-          print('📦 Using cached listening exercise for: $topic');
+          print('📦 Using cached listening exercise for: $cacheKey');
         }
         return cached;
       }
@@ -725,6 +730,7 @@ class PracticeRepositoryImpl implements PracticeRepository {
           'topic': topic,
           if (level != null) 'difficulty_level': level,
           'content_type': contentType,
+          if (accentKey.isNotEmpty) 'accent': accentKey,
         },
       );
 
@@ -812,17 +818,20 @@ class PracticeRepositoryImpl implements PracticeRepository {
     required String text,
     String audioType = 'conversation',
     String? voice,
+    String? accent,
   }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
 
     try {
+      final accentKey = (accent ?? '').trim().toLowerCase();
       final response = await _apiClient.post(
         '/ai/gemini-tts',
         data: {
           'text': trimmed,
           'audio_type': audioType,
           if (voice != null && voice.trim().isNotEmpty) 'voice': voice.trim(),
+          if (accentKey.isNotEmpty) 'accent': accentKey,
         },
       );
 

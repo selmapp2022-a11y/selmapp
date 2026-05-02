@@ -772,3 +772,211 @@ async def update_payment_settings(
         "free_lessons_quota": updated.get("free_lessons_quota", 7),
         "message": "Settings updated successfully",
     }
+
+# ==================== REVENUECAT INTEGRATION ====================
+
+# RevenueCat event types we care about (https://www.revenuecat.com/docs/integrations/webhooks/event-flows)
+_RC_ACTIVATE_EVENTS = {
+    "INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE", "UNCANCELLATION",
+    "TRANSFER", "TEMPORARY_ENTITLEMENT_GRANT", "SUBSCRIPTION_EXTENDED",
+}
+_RC_CANCEL_EVENTS = {"CANCELLATION", "EXPIRATION"}
+_RC_PAUSE_EVENTS = {"SUBSCRIPTION_PAUSED"}
+
+
+def _rc_resolve_user(db: Session, app_user_id: Optional[str]) -> Optional[User]:
+    """Resolve a RevenueCat App User ID to a SELM user.
+
+    Convention: when the mobile/web client logs the user in to RevenueCat,
+    it passes the SELM user id as a string (e.g. "58"). We accept either an
+    integer-string user id or an email as a fallback.
+    """
+    if not app_user_id:
+        return None
+    try:
+        uid = int(app_user_id)
+        return db.query(User).filter(User.id == uid).first()
+    except (TypeError, ValueError):
+        pass
+    return db.query(User).filter(User.email == app_user_id).first()
+
+
+def _rc_status_from_event(event_type: str) -> Optional[SubscriptionStatus]:
+    if event_type in _RC_ACTIVATE_EVENTS:
+        return SubscriptionStatus.ACTIVE
+    if event_type in _RC_CANCEL_EVENTS:
+        return SubscriptionStatus.CANCELLED if event_type == "CANCELLATION" else SubscriptionStatus.EXPIRED
+    if event_type in _RC_PAUSE_EVENTS:
+        return SubscriptionStatus.SUSPENDED
+    return None
+
+
+@router.post("/webhooks/revenuecat")
+async def handle_revenuecat_webhook(
+    request: Request,
+    db: Session = Depends(get_sync_db),
+):
+    """Handle RevenueCat webhook events.
+
+    RevenueCat authenticates webhooks via the `Authorization` header that
+    the user configures in the RevenueCat dashboard. Compare it against
+    `settings.REVENUECAT_WEBHOOK_AUTH` (set as a SECRET on DigitalOcean).
+    """
+    expected = getattr(settings, "REVENUECAT_WEBHOOK_AUTH", None) or ""
+    if expected:
+        provided = request.headers.get("authorization", "")
+        if provided != expected:
+            logger.warning("RevenueCat webhook rejected: invalid Authorization header")
+            raise HTTPException(status_code=401, detail="Invalid webhook auth")
+
+    try:
+        payload = await request.json()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"RevenueCat webhook: invalid JSON: {e}")
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event = payload.get("event") or {}
+    event_type = (event.get("type") or "").upper()
+    app_user_id = event.get("app_user_id") or event.get("original_app_user_id")
+    product_id = event.get("product_id")
+    period_type = event.get("period_type")
+    store = event.get("store")
+    entitlement_ids = event.get("entitlement_ids") or []
+    entitlement = entitlement_ids[0] if entitlement_ids else (event.get("entitlement_id") or "selm_pro")
+    expiration_ms = event.get("expiration_at_ms")
+    purchased_ms = event.get("purchased_at_ms")
+
+    user = _rc_resolve_user(db, app_user_id)
+    if user is None:
+        logger.warning(f"RevenueCat webhook: unknown app_user_id={app_user_id}, event={event_type}")
+        # Still 200 so RevenueCat doesn't retry forever for unknown users.
+        return {"status": "ignored", "reason": "unknown user"}
+
+    new_status = _rc_status_from_event(event_type)
+    if new_status is None:
+        logger.info(f"RevenueCat event {event_type} ignored for user {user.id}")
+        return {"status": "ignored", "reason": f"unhandled event {event_type}"}
+
+    from app.models.payment import Subscription
+
+    sub = (
+        db.query(Subscription)
+        .filter(
+            Subscription.user_id == user.id,
+            Subscription.provider == "revenuecat",
+            Subscription.rc_app_user_id == str(app_user_id),
+        )
+        .order_by(Subscription.created_at.desc())
+        .first()
+    )
+
+    now = datetime.utcnow()
+    end_dt = datetime.utcfromtimestamp(expiration_ms / 1000) if expiration_ms else None
+    start_dt = datetime.utcfromtimestamp(purchased_ms / 1000) if purchased_ms else now
+
+    is_trial = (period_type or "").upper() == "TRIAL"
+
+    # Map product_id to plan/billing_cycle. Default to PREMIUM monthly.
+    from app.models.payment import SubscriptionPlan
+    billing_cycle = "yearly" if "year" in (product_id or "").lower() or "annual" in (product_id or "").lower() else "monthly"
+
+    if sub is None:
+        sub = Subscription(
+            user_id=user.id,
+            provider="revenuecat",
+            plan=SubscriptionPlan.PREMIUM,
+            status=new_status,
+            rc_app_user_id=str(app_user_id),
+            rc_entitlement=entitlement,
+            rc_product_id=product_id,
+            rc_period_type=period_type,
+            rc_store=store,
+            amount=0,
+            currency=event.get("currency", "USD"),
+            billing_cycle=billing_cycle,
+            start_date=start_dt,
+            end_date=end_dt,
+            next_billing_date=end_dt,
+            is_trial=is_trial,
+            trial_start=start_dt if is_trial else None,
+            trial_end=end_dt if is_trial else None,
+        )
+        db.add(sub)
+    else:
+        sub.status = new_status
+        sub.rc_entitlement = entitlement or sub.rc_entitlement
+        sub.rc_product_id = product_id or sub.rc_product_id
+        sub.rc_period_type = period_type or sub.rc_period_type
+        sub.rc_store = store or sub.rc_store
+        if end_dt:
+            sub.end_date = end_dt
+            sub.next_billing_date = end_dt
+        sub.is_trial = is_trial
+        if is_trial:
+            sub.trial_start = sub.trial_start or start_dt
+            sub.trial_end = end_dt
+        if new_status == SubscriptionStatus.CANCELLED:
+            sub.cancelled_at = now
+            sub.cancellation_reason = "revenuecat:" + event_type
+
+    db.commit()
+    logger.info(
+        f"RevenueCat {event_type} applied: user={user.id} status={new_status.value} "
+        f"product={product_id} trial={is_trial}"
+    )
+    return {"status": "ok"}
+
+
+@router.get("/me/subscription")
+async def get_my_subscription_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_sync_db),
+) -> Dict[str, Any]:
+    """Return a compact summary of the user's current entitlement.
+
+    The mobile app calls this on startup to decide whether to gate
+    premium content or show the paywall. Combines PayPal + RevenueCat
+    subscriptions; the most permissive active one wins.
+    """
+    from app.models.payment import Subscription
+
+    subs = (
+        db.query(Subscription)
+        .filter(Subscription.user_id == current_user.id)
+        .order_by(Subscription.created_at.desc())
+        .all()
+    )
+
+    now = datetime.utcnow()
+
+    def _is_entitled(s) -> bool:
+        if s.status != SubscriptionStatus.ACTIVE:
+            return False
+        if s.end_date and s.end_date < now:
+            return False
+        return True
+
+    active = next((s for s in subs if _is_entitled(s)), None)
+
+    if active is None:
+        return {
+            "entitled": False,
+            "plan": "free",
+            "provider": None,
+            "is_trial": False,
+            "trial_end": None,
+            "expires_at": None,
+            "product_id": None,
+            "store": None,
+        }
+
+    return {
+        "entitled": True,
+        "plan": active.plan.value if hasattr(active.plan, "value") else str(active.plan),
+        "provider": active.provider,
+        "is_trial": bool(active.is_trial),
+        "trial_end": active.trial_end.isoformat() if active.trial_end else None,
+        "expires_at": active.end_date.isoformat() if active.end_date else None,
+        "product_id": active.rc_product_id,
+        "store": active.rc_store,
+    }

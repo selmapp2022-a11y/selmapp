@@ -39,13 +39,42 @@ class _ListeningExercisePageState extends State<ListeningExercisePage> {
   // Audio polling state
   bool _isPollingForAudio = false;
 
+  // Accent preference: 'american' (Sarah) or 'british' (Charlotte).
+  // Persisted in SecureStorage under `pref.tts_accent`.
+  String _accent = 'american';
+  static const String _kAccentPrefKey = 'pref.tts_accent';
+  late final SecureStorage _storage;
+
   @override
   void initState() {
     super.initState();
     _exercise = widget.exercise;
-    _repository = PracticeRepositoryImpl(ApiClient(SecureStorage()));
+    _storage = SecureStorage();
+    _repository = PracticeRepositoryImpl(ApiClient(_storage));
     _attachPlayerListeners();
-    _setupAudio();
+    _loadAccentPreference().then((_) => _setupAudio());
+  }
+
+  Future<void> _loadAccentPreference() async {
+    try {
+      final saved = await _storage.read(_kAccentPrefKey);
+      if (saved != null && (saved == 'american' || saved == 'british')) {
+        if (mounted) setState(() => _accent = saved);
+      }
+    } catch (_) {/* keep default */}
+  }
+
+  Future<void> _setAccent(String accent) async {
+    if (accent != 'american' && accent != 'british') return;
+    if (accent == _accent) return;
+    setState(() => _accent = accent);
+    try {
+      await _storage.write(_kAccentPrefKey, accent);
+    } catch (_) {/* non-fatal */}
+    if (_exercise.transcript.trim().isNotEmpty) {
+      _attemptedRegeneration = false;
+      await _tryGenerateAudioFromTranscript();
+    }
   }
 
   void _attachPlayerListeners() {
@@ -172,6 +201,7 @@ class _ListeningExercisePageState extends State<ListeningExercisePage> {
       final audioUrl = await _repository.generateGeminiTtsAudio(
         text: transcript,
         audioType: 'conversation',
+        accent: _accent,
       );
 
       if (!mounted) return;
@@ -235,6 +265,7 @@ class _ListeningExercisePageState extends State<ListeningExercisePage> {
       final generated = await _repository.generateListeningExercise(
         topic: _extractTopicFromTitle(_exercise.title),
         contentType: 'conversation',
+        accent: _accent,
       );
 
       if (!mounted) return;
@@ -514,6 +545,8 @@ class _ListeningExercisePageState extends State<ListeningExercisePage> {
               ],
             ),
           ),
+          _buildAccentPicker(),
+          const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
@@ -535,6 +568,62 @@ class _ListeningExercisePageState extends State<ListeningExercisePage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Compact American/British accent toggle. Tapping switches the saved
+  /// preference and regenerates the audio for the current transcript.
+  Widget _buildAccentPicker() {
+    Widget chip(String value, String label, String flag) {
+      final selected = _accent == value;
+      return GestureDetector(
+        onTap: _isLoading ? null : () => _setAccent(value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: selected
+                ? const Color(0xFF2EC4B6).withValues(alpha: 0.85)
+                : Colors.white.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(flag, style: const TextStyle(fontSize: 13)),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Tooltip(
+      message: 'Choose accent',
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            chip('american', 'US', '🇺🇸'),
+            const SizedBox(width: 2),
+            chip('british', 'UK', '🇬🇧'),
+          ],
+        ),
       ),
     );
   }

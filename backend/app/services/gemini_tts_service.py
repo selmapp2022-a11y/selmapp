@@ -268,7 +268,8 @@ class GeminiTTSService:
         topic: str,
         difficulty_level: str,
         content_type: str = "conversation",
-        speaker_names: Optional[List[str]] = None
+        speaker_names: Optional[List[str]] = None,
+        accent: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate listening content with appropriate script and audio.
@@ -297,11 +298,21 @@ class GeminiTTSService:
             script = script_result["script"]
             speakers = script_result["speakers"]
 
-            # Generate audio using Gemini TTS
+            # Tag every speaker with the requested accent so the TTS provider
+            # (ElevenLabs) can resolve American/British voices.
+            accent_norm = (accent or "").strip().lower() or None
+            if accent_norm and speakers:
+                speakers = [
+                    {**(s if isinstance(s, dict) else {"name": str(s)}), "accent": accent_norm}
+                    for s in speakers
+                ]
+
+            # Generate audio (ElevenLabs or Gemini, depending on TTS_PROVIDER)
             audio_result = await self.generate_audio_content(
                 text=script,
                 audio_type=content_type,
-                speaker_config=speakers
+                speaker_config=speakers,
+                voice_settings={"accent": accent_norm} if accent_norm else None,
             )
 
             if not audio_result["success"]:
@@ -379,15 +390,70 @@ class GeminiTTSService:
     ) -> Dict[str, Any]:
         """Generate an appropriate script for the listening content"""
 
-        # Adjust script complexity based on difficulty level
+        # Adjust script complexity based on CEFR level
         length_guide = {
-            "A1": "50-80 words",
-            "A2": "80-120 words",
-            "B1": "120-160 words",
-            "B2": "160-200 words",
-            "C1": "200-250 words",
-            "C2": "250-300 words"
+            "A1": "60-90 words",
+            "A2": "90-140 words",
+            "B1": "140-200 words",
+            "B2": "200-260 words",
+            "C1": "260-320 words",
+            "C2": "320-400 words",
         }
+
+        # Per-level CEFR guidance — what learners can do, sentence shape,
+        # vocabulary band, tense range, and target question depth.
+        cefr_guidance = {
+            "A1": (
+                "Use only the most basic everyday words (family, food, numbers, "
+                "days, common verbs). Short, simple sentences (5-9 words), "
+                "present simple, present continuous, simple imperatives. "
+                "Speakers should pause between ideas. No idioms, no phrasal verbs. "
+                "Questions should be literal recall (who/what/where/when)."
+            ),
+            "A2": (
+                "Use frequent, concrete vocabulary about routines, work, study, "
+                "shopping, travel. Short to medium sentences (8-14 words). "
+                "Past simple, near future ('going to'), can/can't, basic comparatives. "
+                "1-2 simple connectors (and, but, because). Questions test "
+                "main ideas plus one obvious detail."
+            ),
+            "B1": (
+                "Topic-relevant intermediate vocabulary; allow 2-3 mid-frequency "
+                "words explained in context. Mixed sentence lengths (10-18 words). "
+                "Present perfect, past continuous, first conditional, common "
+                "modals (should, might, have to). Use natural connectors "
+                "(however, although, so, then). Questions test main idea, "
+                "supporting detail, and one inference."
+            ),
+            "B2": (
+                "Independent-user vocabulary including some abstract terms and "
+                "collocations. Sentence length 14-22 words with subordinate "
+                "clauses. Second/third conditional, present/past perfect, "
+                "passive voice, reported speech. Include opinion/attitude markers "
+                "('it seems', 'apparently'). Questions probe attitude, gist, "
+                "specific information, and inference from tone."
+            ),
+            "C1": (
+                "Advanced vocabulary, common idioms, varied collocations, formal "
+                "and neutral register. Long, complex sentences with embedded "
+                "clauses. Full range of tenses, mixed conditionals, inversion "
+                "for emphasis. Speakers signal stance and concession naturally. "
+                "Questions cover implication, speaker purpose, register shifts, "
+                "and synthesis across the text."
+            ),
+            "C2": (
+                "Proficient vocabulary including low-frequency, idiomatic, and "
+                "domain-specific terms; nuance, irony, and connotation expected. "
+                "Sophisticated syntax: cleft sentences, fronting, ellipsis, "
+                "discourse markers. Cohesive, near-native flow. Questions test "
+                "subtle implication, rhetorical strategy, evaluative judgment, "
+                "and recognition of bias or stance."
+            ),
+        }
+
+        level_key = (difficulty_level or "B1").upper()
+        level_guidance = cefr_guidance.get(level_key, cefr_guidance["B1"])
+        target_length = length_guide.get(level_key, "140-200 words")
 
         # Set default speaker names based on content type
         if not speaker_names:
@@ -398,18 +464,24 @@ class GeminiTTSService:
             else:
                 speaker_names = ["Narrator"]
 
-        # Generate script prompt
-        prompt = f"""Generate a {length_guide.get(difficulty_level, "100-150 words")} {content_type} script about "{topic}" for {difficulty_level} level English learners.
+        prompt = f"""You are a CEFR-aligned English-listening content writer for SELM, an AI English-learning platform for any English learner worldwide.
+
+Generate a {target_length} {content_type} about "{topic}" calibrated to CEFR level {level_key}.
 
 Speakers: {', '.join(speaker_names)}
 
-Requirements:
-- Use simple vocabulary appropriate for {difficulty_level} level
-- Include natural conversation patterns
-- Focus on key vocabulary related to the topic
-- Make it engaging and educational
+CEFR {level_key} requirements:
+{level_guidance}
 
-Output Format:
+Universal rules:
+- Natural spoken English, not written prose. Use contractions where appropriate.
+- Avoid culturally narrow references; keep examples globally accessible.
+- Do NOT use any non-English text. Output English only.
+- Do NOT include translations, transliterations, or glosses inside the script.
+- 4 multiple-choice comprehension questions, each with 4 plausible options and exactly one correct answer.
+- Vocabulary list of 4-6 useful items from the script, each with a short, level-appropriate English definition.
+
+Output Format (use these exact section markers):
 [SCRIPT START]
 [Speaker Name]: Dialogue line
 ...
@@ -421,14 +493,14 @@ Output Format:
     "question": "Question text here?",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct_answer": "Option A",
-    "explanation": "Why this is correct."
+    "explanation": "Why this is correct, in one short sentence."
   }}
 ]
 [QUESTIONS END]
 
 [VOCABULARY START]
-- word1: definition
-- word2: definition
+- word1: short definition
+- word2: short definition
 [VOCABULARY END]
 """
 

@@ -47,6 +47,7 @@ async def generate_listening_exercise(
     topic: str = Body(..., min_length=2),
     difficulty_level: str = Body(default=None),
     content_type: str = Body(default="conversation"),
+    accent: Optional[str] = Body(default=None, description="'american' or 'british' (ElevenLabs only)"),
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db)
 ) -> Dict[str, Any]:
@@ -71,7 +72,9 @@ async def generate_listening_exercise(
         from sqlalchemy import select, and_, or_
         from datetime import datetime
         
-        cache_key = f"listening:{current_user.id}:{topic.lower().replace(' ', '_')}:{level}"
+        # Cache key includes accent so American/British versions are stored separately
+        accent_norm = (accent or "").strip().lower() or "default"
+        cache_key = f"listening:{current_user.id}:{topic.lower().replace(' ', '_')}:{level}:{accent_norm}"
         
         result_query = await db.execute(
             select(GeneratedContentCache).where(
@@ -115,7 +118,8 @@ async def generate_listening_exercise(
             topic=topic,
             difficulty_level=level,
             content_type=content_type,
-            speaker_names=["Dr. Anya", "Liam"] if content_type == "conversation" else ["Narrator"]
+            speaker_names=["Dr. Anya", "Liam"] if content_type == "conversation" else ["Narrator"],
+            accent=accent,
         )
         
         if result.get("success"):

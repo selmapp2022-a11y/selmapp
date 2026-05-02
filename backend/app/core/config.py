@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_SECRET: Optional[str] = None
     PAYPAL_MODE: str = "sandbox"  # "sandbox" or "live"
     PAYPAL_WEBHOOK_ID: Optional[str] = None
+
+    # RevenueCat — webhook auth header value (free-form bearer token set in
+    # the RevenueCat dashboard; we compare equality on incoming requests).
+    REVENUECAT_WEBHOOK_AUTH: Optional[str] = None
+    # Default trial length when a new subscription is created without one.
+    SELM_DEFAULT_TRIAL_DAYS: int = 3
     
     # Payment Settings
     PAYMENT_CURRENCY: str = "USD"

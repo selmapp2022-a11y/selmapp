@@ -134,12 +134,19 @@ class SubscriptionUpdate(BaseModel):
 class SubscriptionResponse(SubscriptionBase):
     """Schema for subscription response"""
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     user_id: int
     status: SubscriptionStatusEnum
     paypal_subscription_id: Optional[str] = None
     paypal_plan_id: Optional[str] = None
+    # RevenueCat fields (mobile App Store / Play Store / Web Billing)
+    provider: Optional[str] = "paypal"
+    rc_app_user_id: Optional[str] = None
+    rc_entitlement: Optional[str] = None
+    rc_product_id: Optional[str] = None
+    rc_period_type: Optional[str] = None
+    rc_store: Optional[str] = None
     start_date: datetime
     end_date: Optional[datetime] = None
     next_billing_date: Optional[datetime] = None

@@ -105,10 +105,18 @@ class Subscription(Base):
     plan = Column(Enum(SubscriptionPlan), default=SubscriptionPlan.FREE, nullable=False)
     status = Column(Enum(SubscriptionStatus), default=SubscriptionStatus.INACTIVE, nullable=False)
     
-    # PayPal Subscription Integration
+    # PayPal Subscription Integration (legacy)
     paypal_subscription_id = Column(String(255), unique=True, index=True)
     paypal_plan_id = Column(String(255))
-    
+
+    # RevenueCat Subscription Integration
+    provider = Column(String(20), default="paypal", nullable=False)  # paypal | revenuecat
+    rc_app_user_id = Column(String(255), index=True)                 # RevenueCat App User ID
+    rc_entitlement = Column(String(100))                              # e.g. "selm_pro"
+    rc_product_id = Column(String(255))                               # e.g. "selm_monthly"
+    rc_period_type = Column(String(20))                               # NORMAL | TRIAL | INTRO | PROMOTIONAL
+    rc_store = Column(String(20))                                     # APP_STORE | PLAY_STORE | STRIPE | RC_BILLING
+
     # Billing Details
     amount = Column(DECIMAL(10, 2), nullable=False, default=0.00)
     currency = Column(String(3), default="USD", nullable=False)

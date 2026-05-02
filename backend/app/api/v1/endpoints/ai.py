@@ -23,10 +23,11 @@ class TextToSpeechRequest(BaseModel):
     slow: bool = False
 
 class GeminiTTSRequest(BaseModel):
-    """Request model for Gemini native audio TTS"""
+    """Request model for native-audio TTS (dispatched to ElevenLabs or Gemini)."""
     text: str
-    voice: Optional[str] = None  # e.g., "Kore", "Puck", "Charon"
+    voice: Optional[str] = None  # e.g., "Kore", "Sarah", "Charlotte"
     audio_type: str = "general"  # general, assessment, conversation
+    accent: Optional[str] = None  # "american" | "british" — overrides default voice
 
 class GrammarCheckRequest(BaseModel):
     text: str
@@ -117,13 +118,22 @@ async def gemini_text_to_speech(
         
         # Use provided voice or default from settings
         voice_name = request.voice or getattr(settings, 'GEMINI_TTS_VOICE', 'Kore')
-        
-        logger.info(f"Generating Gemini TTS for text: {request.text[:50]}... (voice: {voice_name})")
-        
+        accent = (request.accent or "").strip().lower() or None
+
+        logger.info(
+            f"Generating TTS for text: {request.text[:50]}... "
+            f"(voice={voice_name}, accent={accent or 'default'})"
+        )
+
+        speaker = {"name": "Speaker", "voice_name": voice_name}
+        if accent:
+            speaker["accent"] = accent  # ElevenLabs path uses this to pick Sarah/Charlotte
+
         result = await tts_service.generate_audio_content(
             text=request.text,
             audio_type=request.audio_type,
-            speaker_config=[{"name": "Speaker", "voice_name": voice_name}]
+            speaker_config=[speaker],
+            voice_settings={"accent": accent} if accent else None,
         )
         
         if result.get("success"):
