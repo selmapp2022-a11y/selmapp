@@ -124,14 +124,9 @@ class AudioStorageService:
                 with open(full_path, "wb") as f:
                     f.write(audio_bytes)
 
-                # URL resolves via FastAPI static mount; build absolute URL for mobile clients
-                if self.base_url.startswith("http://") or self.base_url.startswith("https://"):
-                    base = self.base_url.rstrip("/")
-                    audio_url = f"{base}/tts/{safe_name}"
-                else:
-                    # base_url is a path like /media/audio → prefix public base
-                    path = self.base_url.rstrip("/")
-                    audio_url = f"{self.public_base}{path}/tts/{safe_name}"
+                # Serve via FastAPI endpoint /api/v1/ai/audio/{filename} which reads
+                # back from this same filesystem mount. Build absolute URL for mobile.
+                audio_url = f"{self.public_base}/api/v1/ai/audio/{safe_name}"
                 return {
                     "success": True,
                     "audio_url": audio_url,
