@@ -327,18 +327,37 @@ async def assess_speech(
                     )
                 audio_bytes = await response.read()
 
-        # Transcribe audio using STT
-        stt_service = GoogleSTTService()
-        stt_result = await stt_service.transcribe(audio_bytes, language_code="en-US")
-
-        if not stt_result.get("success"):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Speech transcription failed: {stt_result.get('error')}"
-            )
-
-        transcript_text = stt_result.get("text", "")
-        words = stt_result.get("words", [])
+        # Transcribe audio using STT. STT is optional: when it is not
+        # available (no Google STT key or 404), we still want SpeechAce to
+        # score the audio against the provided reference text. Only error
+        # out if STT fails AND the caller did not provide a reference text.
+        transcript_text = ""
+        words: list = []
+        try:
+            stt_service = GoogleSTTService()
+            stt_result = await stt_service.transcribe(audio_bytes, language_code="en-US")
+            if stt_result.get("success"):
+                transcript_text = stt_result.get("text", "") or ""
+                words = stt_result.get("words", []) or []
+            else:
+                logger.warning(
+                    f"STT unavailable, continuing with reference-only scoring: "
+                    f"{stt_result.get('error')}"
+                )
+                if not (assessment_request.prompt_text or "").strip():
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Transcription service unavailable and no reference text provided",
+                    )
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"STT call raised, continuing without transcript: {e}")
+            if not (assessment_request.prompt_text or "").strip():
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Transcription service unavailable and no reference text provided",
+                )
 
         # Estimate duration from words
         duration_ms = 0
