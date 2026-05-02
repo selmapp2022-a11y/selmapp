@@ -208,6 +208,16 @@ class ElevenLabsTTSService:
                 },
             )
 
+            voice_label = (
+                "Sarah" if voice_id == self.voice_american
+                else "Charlotte" if voice_id == self.voice_british
+                else voice_id
+            )
+            accent_label = (
+                "american" if voice_id == self.voice_american
+                else "british" if voice_id == self.voice_british
+                else None
+            )
             return {
                 "success": True,
                 "audio_url": storage_result["audio_url"],
@@ -219,13 +229,18 @@ class ElevenLabsTTSService:
                 "file_size": storage_result.get("file_size", len(wav_bytes)),
                 "speaker_count": 1,
                 "tts_model": body["model_id"],
-                "voice": voice_id,
+                "voice": voice_label,
+                "voice_id": voice_id,
+                "accent": accent_label,
+                "provider": "elevenlabs",
                 "metadata": {
                     "text_length": len(text),
                     "audio_type": audio_type,
                     "generated_at": datetime.utcnow().isoformat(),
                     "model": body["model_id"],
                     "voice_used": voice_id,
+                    "voice_name": voice_label,
+                    "accent": accent_label,
                     "api": "elevenlabs",
                 },
             }

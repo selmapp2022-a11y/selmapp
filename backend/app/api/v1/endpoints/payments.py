@@ -940,12 +940,27 @@ async def get_my_subscription_summary(
     """
     from app.models.payment import Subscription
 
-    subs = (
-        db.query(Subscription)
-        .filter(Subscription.user_id == current_user.id)
-        .order_by(Subscription.created_at.desc())
-        .all()
-    )
+    # Defensive: if the subscriptions table doesn't exist yet (older DBs),
+    # treat the user as free instead of returning 500.
+    try:
+        subs = (
+            db.query(Subscription)
+            .filter(Subscription.user_id == current_user.id)
+            .order_by(Subscription.created_at.desc())
+            .all()
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"/me/subscription: subscriptions table query failed ({e}); returning free entitlement")
+        return {
+            "entitled": False,
+            "plan": "free",
+            "provider": None,
+            "is_trial": False,
+            "trial_end": None,
+            "expires_at": None,
+            "product_id": None,
+            "store": None,
+        }
 
     now = datetime.utcnow()
 

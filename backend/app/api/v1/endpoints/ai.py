@@ -137,13 +137,19 @@ async def gemini_text_to_speech(
         )
         
         if result.get("success"):
-            logger.info(f"Gemini TTS generated successfully: {result.get('audio_url')}")
+            logger.info(f"TTS generated successfully: {result.get('audio_url')}")
+            # Echo back the actual provider/voice that was used so the client
+            # can show the right label (e.g. "British accent — Charlotte").
             return {
                 "success": True,
                 "audio_url": result["audio_url"],
                 "duration_seconds": result.get("duration_seconds", 0),
-                "voice": voice_name,
-                "model": result.get("tts_model", "gemini-native-audio")
+                "voice": result.get("voice") or result.get("voice_name") or voice_name,
+                "accent": result.get("accent") or accent,
+                "provider": result.get("provider") or (
+                    "elevenlabs" if str(result.get("tts_model", "")).startswith("eleven") else "gemini"
+                ),
+                "model": result.get("tts_model", "gemini-native-audio"),
             }
         else:
             error_msg = result.get("error", "Unknown TTS error")
