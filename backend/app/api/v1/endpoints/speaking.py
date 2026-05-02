@@ -367,29 +367,61 @@ async def assess_speech(
             if starts and ends:
                 duration_ms = max(ends) - min(starts)
 
-        # Assess speech using integrated evaluation service
-        evaluator = SpeakingEvaluationService()
-        result = await evaluator.evaluate(
-            reference_text=assessment_request.prompt_text or "",
-            transcript_text=transcript_text,
-            transcript_words=words,
-            duration_ms=duration_ms,
-            audio_bytes=audio_bytes,
-            user_id=str(current_user.id)
-        )
+        # Try SpeechAce directly first when configured — it returns a clean
+        # snake_case payload that maps 1:1 to SpeechAssessmentResponse. Fall
+        # back to the integrated evaluation service (Gemini path) only if
+        # SpeechAce is missing or fails.
+        speechace = SpeechaceService()
+        result: Dict[str, Any] = {}
+        if speechace.api_key:
+            sa = await speechace.assess_pronunciation(
+                audio_bytes=audio_bytes,
+                reference_text=assessment_request.prompt_text or "",
+                user_id=str(current_user.id),
+            )
+            if sa.get("success") and sa.get("assessment"):
+                result = sa["assessment"]
+                logger.info(
+                    f"SpeechAce ok: overall={result.get('overall_score')}"
+                    f" pron={result.get('pronunciation_score')}"
+                )
+            else:
+                logger.warning(f"SpeechAce failed: {sa.get('error')}")
 
-        # Convert to response format
+        if not result:
+            # Last-resort fallback (Gemini path returns camelCase keys)
+            evaluator = SpeakingEvaluationService()
+            raw = await evaluator.evaluate(
+                reference_text=assessment_request.prompt_text or "",
+                transcript_text=transcript_text,
+                transcript_words=words,
+                duration_ms=duration_ms,
+                audio_bytes=audio_bytes,
+                user_id=str(current_user.id),
+            )
+            # Normalize camelCase → snake_case so the response is consistent
+            result = {
+                "overall_score": raw.get("overall_score") or raw.get("overallScore") or 0.0,
+                "pronunciation_score": raw.get("pronunciation_score"),
+                "fluency_score": raw.get("fluency_score"),
+                "accuracy_score": raw.get("accuracy_score"),
+                "transcribed_text": (raw.get("transcript") or {}).get("text", transcript_text),
+                "feedback": "Evaluated via Gemini fallback",
+                "suggestions": raw.get("tips") or [],
+                "confidence": 0.0,
+            }
+
         return SpeechAssessmentResponse(
-            overall_score=result.get("overall_score", 0.0),
+            overall_score=float(result.get("overall_score") or 0.0),
             pronunciation_score=result.get("pronunciation_score"),
             fluency_score=result.get("fluency_score"),
             accuracy_score=result.get("accuracy_score"),
-            transcribed_text=result.get("transcribed_text", transcript_text),
-            phoneme_scores=result.get("phoneme_scores", {}),
-            word_scores=result.get("word_scores", {}),
-            feedback=result.get("feedback", "Assessment completed"),
-            suggestions=result.get("suggestions", []),
-            confidence=result.get("confidence", 0.0)
+            transcribed_text=result.get("transcribed_text") or transcript_text,
+            phoneme_scores=result.get("phoneme_scores") or {},
+            word_scores=result.get("word_scores") or {},
+            feedback=result.get("feedback") or "Assessment completed",
+            suggestions=result.get("suggestions") or [],
+            confidence=float(result.get("confidence") or 0.0),
         )
 
     except HTTPException:
