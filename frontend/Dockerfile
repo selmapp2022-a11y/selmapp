@@ -30,7 +30,7 @@ RUN flutter pub get
 # Web app is mounted under /app/ on selmapp.com, so all internal asset
 # URLs must include that prefix. DigitalOcean strips the route prefix
 # when forwarding, so the container itself still serves at /.
-RUN flutter build web --release --pwa-strategy=none --base-href "/app/"
+RUN flutter build web --release --pwa-strategy=none --base-href "/"
 
 # Stage 2: Serve with nginx, with SPA fallback for client-side routing
 FROM nginx:alpine
