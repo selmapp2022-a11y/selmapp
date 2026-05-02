@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../../../../core/network/api_client.dart';
+import '../../../../core/storage/secure_storage.dart';
 import '../models/exercise_models.dart';
 import '../services/ai_practice_service.dart';
 
@@ -451,7 +454,44 @@ class PracticeRepositoryImpl implements PracticeRepository {
     }
   }
 
-  DifficultyLevel _parseDifficultyLevel(String level) {
+  /// Resolve a CEFR level string. Priority:
+  /// 1. explicit non-empty value
+  /// 2. user.current_level from SecureStorage (set after login)
+  /// 3. fallback to "B1"
+  Future<String> _resolveCefrLevel(String? explicit) async {
+    if (explicit != null && explicit.trim().isNotEmpty) {
+      return explicit.trim().toUpperCase();
+    }
+    try {
+      final raw = await SecureStorage().read('user_data');
+      if (raw != null && raw.isNotEmpty) {
+        final user = jsonDecode(raw);
+        if (user is Map) {
+          final lvl = user['current_level']?.toString();
+          if (lvl != null && lvl.isNotEmpty && lvl.toLowerCase() != 'null') {
+            return lvl.toUpperCase();
+          }
+        }
+      }
+    } catch (_) {
+      // Ignore storage errors and fall through to default
+    }
+    return 'B1';
+  }
+
+  /// Convert a DifficultyLevel enum back to its CEFR string ("A1", "B2", ...).
+  static String levelToCefr(DifficultyLevel level) {
+    switch (level) {
+      case DifficultyLevel.a1: return 'A1';
+      case DifficultyLevel.a2: return 'A2';
+      case DifficultyLevel.b1: return 'B1';
+      case DifficultyLevel.b2: return 'B2';
+      case DifficultyLevel.c1: return 'C1';
+      case DifficultyLevel.c2: return 'C2';
+    }
+  }
+
+    DifficultyLevel _parseDifficultyLevel(String level) {
     switch (level.toUpperCase()) {
       case 'A1':
         return DifficultyLevel.a1;
@@ -723,12 +763,17 @@ class PracticeRepositoryImpl implements PracticeRepository {
       }
     }
 
+    // Resolve CEFR level: explicit param > stored user current_level > B1 default.
+    // The backend used to fall back to user.current_level which is "A1" for users
+    // who haven't completed onboarding, making every generated listening A1.
+    final resolvedLevel = await _resolveCefrLevel(level);
+
     try {
       final response = await _apiClient.post(
         '/listening/generate',
         data: {
           'topic': topic,
-          if (level != null) 'difficulty_level': level,
+          'difficulty_level': resolvedLevel,
           'content_type': contentType,
           if (accentKey.isNotEmpty) 'accent': accentKey,
         },

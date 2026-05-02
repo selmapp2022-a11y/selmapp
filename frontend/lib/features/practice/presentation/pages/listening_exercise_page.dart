@@ -264,6 +264,9 @@ class _ListeningExercisePageState extends State<ListeningExercisePage> {
     try {
       final generated = await _repository.generateListeningExercise(
         topic: _extractTopicFromTitle(_exercise.title),
+        // Preserve the original exercise's CEFR level so a B2 listening
+        // doesn't get regenerated as A1 just because audio was missing.
+        level: PracticeRepositoryImpl.levelToCefr(_exercise.level),
         contentType: 'conversation',
         accent: _accent,
       );
