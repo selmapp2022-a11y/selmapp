@@ -500,57 +500,131 @@ class _LoginPageState extends State<LoginPage>
   }
 
   Widget _buildSocialLoginButtons() {
-    return Container(
-      width: double.infinity,
-      height: 56,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.borderColor),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: .03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: OutlinedButton.icon(
-        onPressed: _isLoading ? null : _handleGoogleLogin,
-        icon: Container(
-          width: 24,
-          height: 24,
+    return Column(
+      children: [
+        // Google button
+        Container(
+          width: double.infinity,
+          height: 56,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.borderColor),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: .03),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-          child: const Center(
-            child: Text(
-              'G',
+          child: OutlinedButton.icon(
+            onPressed: _isLoading ? null : _handleGoogleLogin,
+            icon: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Center(
+                child: Text(
+                  'G',
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+            label: const Text(
+              'Continue with Google',
               style: TextStyle(
-                color: Colors.red,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.textPrimaryColor,
+              side: BorderSide.none,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
               ),
             ),
           ),
         ),
-        label: const Text(
-          'Continue with Google',
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
+        // Apple button (iOS only)
+        if (_oauthService.isAppleAvailable) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            height: 56,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: .12),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: OutlinedButton.icon(
+              onPressed: _isLoading ? null : _handleAppleLogin,
+              icon: const Icon(Icons.apple, color: Colors.white, size: 24),
+              label: const Text(
+                'Continue with Apple',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide.none,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
           ),
-        ),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppTheme.textPrimaryColor,
-          side: BorderSide.none,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-        ),
-      ),
+        ],
+      ],
     );
+  }
+
+  Future<void> _handleAppleLogin() async {
+    setState(() => _isLoading = true);
+    try {
+      final result = await _oauthService.nativeAppleSignIn();
+      if (mounted) {
+        if (result['success'] == true) {
+          if (context.canPop()) context.pop();
+          context.go('/home');
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text((result['message'] ?? 'Apple sign-in failed').toString()),
+              backgroundColor: AppTheme.errorColor,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Apple sign-in failed: $e'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Widget _buildSignUpLink() {
@@ -584,7 +658,14 @@ class _LoginPageState extends State<LoginPage>
     setState(() => _isLoading = true);
 
     try {
-      final result = await _oauthService.loginWithGoogle();
+      final result = await _oauthService.nativeGoogleSignIn();
+      // On success, route to home; AuthStateNotifier listeners will refresh.
+      if (mounted && result['success'] == true) {
+        if (context.canPop()) context.pop();
+        context.go('/home');
+        setState(() => _isLoading = false);
+        return;
+      }
 
       if (mounted) {
         if (result['success']) {
