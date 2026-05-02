@@ -822,11 +822,21 @@ async def handle_revenuecat_webhook(
     the user configures in the RevenueCat dashboard. Compare it against
     `settings.REVENUECAT_WEBHOOK_AUTH` (set as a SECRET on DigitalOcean).
     """
-    expected = getattr(settings, "REVENUECAT_WEBHOOK_AUTH", None) or ""
+    expected = (getattr(settings, "REVENUECAT_WEBHOOK_AUTH", None) or "").strip()
     if expected:
-        provided = request.headers.get("authorization", "")
+        raw = (request.headers.get("authorization") or "").strip()
+        # Accept either the raw secret or a "Bearer <secret>" / "Token <secret>" form.
+        provided = raw
+        for prefix in ("Bearer ", "bearer ", "Token ", "token "):
+            if provided.startswith(prefix):
+                provided = provided[len(prefix):].strip()
+                break
         if provided != expected:
-            logger.warning("RevenueCat webhook rejected: invalid Authorization header")
+            logger.warning(
+                "RevenueCat webhook rejected: invalid Authorization header "
+                "(provided_len=%d, expected_len=%d, provided_prefix=%r, expected_prefix=%r)",
+                len(provided), len(expected), provided[:6], expected[:6],
+            )
             raise HTTPException(status_code=401, detail="Invalid webhook auth")
 
     try:
