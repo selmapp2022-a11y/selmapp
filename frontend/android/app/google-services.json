@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "731680024116",
+    "project_id": "selm-7ca69",
+    "storage_bucket": "selm-7ca69.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:731680024116:android:059ab6cc13b549e3004c61",
+        "android_client_info": {
+          "package_name": "com.selmapp.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDHehrVuv0CitHXAumQ5LgK1iu4cEVkgU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

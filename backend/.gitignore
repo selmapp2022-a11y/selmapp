@@ -1,0 +1,13 @@
+.logs
+logs/
+_pycache_
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+/__pycache__
+/_pycache_
+vev/
+
+*pycache*

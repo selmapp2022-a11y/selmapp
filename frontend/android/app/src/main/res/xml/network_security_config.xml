@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Production network security policy.
+
+      Keep this file STRICT for release builds: HTTPS only and system CAs only.
+      Debug-only allowances (HTTP, user CAs, proxies) belong in:
+        android/app/src/debug/res/xml/network_security_config.xml
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
+

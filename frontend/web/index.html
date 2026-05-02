@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Selm English applicaiton">
+  
+  <!-- Cache Control - Prevents aggressive caching during development -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Selm">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>Selm</title>
+  
+  <script>
+    // Clear old service worker caches and force refresh on new deployments
+    // Change this version number when you deploy a new version
+    const APP_VERSION = '2025-12-28';
+    const VERSION_KEY = 'selm_app_version';
+    
+    if ('serviceWorker' in navigator) {
+      // Check for updates on page load
+      window.addEventListener('load', async function() {
+        try {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (let registration of registrations) {
+            // Force update check
+            registration.update();
+          }
+        } catch (e) {
+          console.log('Service worker update check failed:', e);
+        }
+      });
+      
+      // Listen for new service worker installing
+      navigator.serviceWorker.addEventListener('controllerchange', function() {
+        // New service worker activated, reload to get new content
+        window.location.reload();
+      });
+    }
+    
+    // Function to clear all caches and reload (call this when needed)
+    window.clearAppCache = async function() {
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+      }
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map(r => r.unregister()));
+      }
+      window.location.reload(true);
+    };
+
+    // On version change, force-clear caches/SW once to prevent old deployments
+    // (and their stored app shell) from sticking around after redeploys.
+    try {
+      const previous = localStorage.getItem(VERSION_KEY);
+      if (previous !== APP_VERSION) {
+        localStorage.setItem(VERSION_KEY, APP_VERSION);
+        window.addEventListener('load', async function () {
+          try {
+            await window.clearAppCache();
+          } catch (e) {
+            console.log('Cache clear on version change failed:', e);
+          }
+        });
+      }
+    } catch (e) {
+      console.log('Version-based cache clear skipped:', e);
+    }
+  </script>
+</head>
+<body>
+<script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (let registration of registrations) {
+          console.log('Unregistering old Service Worker:', registration);
+          registration.unregister();
+        }
+      });
+    }
+</script>
+
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

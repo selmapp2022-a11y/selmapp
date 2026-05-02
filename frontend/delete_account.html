@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delete Account - Selm</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .company-logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .company-logo h1 {
+            font-size: 2.5em;
+            background: linear-gradient(135deg, #6366F1, #8B5CF6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .company-name {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        h2 {
+            color: #1a1a2e;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-size: 1.4em;
+            border-bottom: 2px solid #4a90d9;
+            padding-bottom: 5px;
+        }
+        h3 {
+            color: #1a1a2e;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        p {
+            margin-bottom: 15px;
+        }
+        ul, ol {
+            margin-left: 25px;
+            margin-bottom: 15px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        .warning-box {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .warning-box h3 {
+            color: #856404;
+            margin-top: 0;
+        }
+        .info-box {
+            background-color: #e8f4fc;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .delete-box {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .delete-box h3 {
+            color: #721c24;
+            margin-top: 0;
+        }
+        .retention-box {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .retention-box h3 {
+            color: #155724;
+            margin-top: 0;
+        }
+        a {
+            color: #4a90d9;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+        }
+        .steps-list {
+            counter-reset: step-counter;
+            list-style: none;
+            margin-left: 0;
+        }
+        .steps-list li {
+            counter-increment: step-counter;
+            padding: 15px 15px 15px 60px;
+            position: relative;
+            background: #f9f9f9;
+            margin-bottom: 10px;
+            border-radius: 8px;
+        }
+        .steps-list li::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(135deg, #6366F1, #8B5CF6);
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        .contact-section {
+            background-color: #f0f0f0;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 30px;
+        }
+        .contact-section h3 {
+            margin-top: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+        th {
+            background-color: #f0f0f0;
+        }
+        .email-link {
+            font-weight: bold;
+            color: #6366F1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="company-logo">
+            <h1>Selm</h1>
+            <p class="company-name">by SELM MOBILE APPLICATION INC.</p>
+        </div>
+        
+        <h2>Account Deletion Request</h2>
+        <p>We respect your privacy and your right to control your personal data. This page explains how you can request the deletion of your Selm account and what data will be affected.</p>
+
+        <h2>How to Delete Your Account</h2>
+        
+        <h3>Option 1: Delete from Within the App</h3>
+        <ol class="steps-list">
+            <li>Open the Selm application on your device</li>
+            <li>Go to <strong>Settings</strong> (tap the gear icon)</li>
+            <li>Scroll down and tap <strong>"Account"</strong></li>
+            <li>Tap <strong>"Delete Account"</strong></li>
+            <li>Confirm your decision when prompted</li>
+            <li>Your account will be permanently deleted</li>
+        </ol>
+
+        <h3>Option 2: Request Deletion via Email</h3>
+        <p>If you cannot access the app or prefer to request deletion via email, please send an email to:</p>
+        <div class="info-box">
+            <p><strong>Email:</strong> <a href="mailto:selmapp2022@gmail.com?subject=Account%20Deletion%20Request" class="email-link">selmapp2022@gmail.com</a></p>
+            <p><strong>Subject:</strong> Account Deletion Request</p>
+            <p><strong>Include in your email:</strong></p>
+            <ul>
+                <li>The email address associated with your Selm account</li>
+                <li>Your full name (as registered in the app)</li>
+                <li>Confirmation that you want to delete your account</li>
+            </ul>
+            <p>We will process your request within <strong>7 business days</strong> and send you a confirmation email once completed.</p>
+        </div>
+
+        <h2>Data That Will Be Deleted</h2>
+        <div class="delete-box">
+            <h3>Permanently Deleted Data</h3>
+            <p>When you delete your account, the following data will be <strong>permanently removed</strong> from our systems:</p>
+            <table>
+                <tr>
+                    <th>Data Type</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td>Account Information</td>
+                    <td>Email address, username, password, profile picture</td>
+                </tr>
+                <tr>
+                    <td>Profile Data</td>
+                    <td>Full name, English proficiency level, learning preferences</td>
+                </tr>
+                <tr>
+                    <td>Learning Progress</td>
+                    <td>Completed lessons, quiz scores, study statistics, achievements</td>
+                </tr>
+                <tr>
+                    <td>Audio Recordings</td>
+                    <td>All pronunciation recordings from speaking exercises</td>
+                </tr>
+                <tr>
+                    <td>Usage Data</td>
+                    <td>App interaction history, learning patterns, session data</td>
+                </tr>
+                <tr>
+                    <td>Device Tokens</td>
+                    <td>Push notification tokens and device identifiers</td>
+                </tr>
+            </table>
+        </div>
+
+        <h2>Data Retention</h2>
+        <div class="retention-box">
+            <h3>Data That May Be Retained</h3>
+            <p>Some data may be retained for a limited period after account deletion for the following reasons:</p>
+            <table>
+                <tr>
+                    <th>Data Type</th>
+                    <th>Retention Period</th>
+                    <th>Reason</th>
+                </tr>
+                <tr>
+                    <td>Transaction Records</td>
+                    <td>Up to 7 years</td>
+                    <td>Legal and tax compliance requirements</td>
+                </tr>
+                <tr>
+                    <td>Anonymized Analytics</td>
+                    <td>Indefinitely</td>
+                    <td>Aggregated, non-identifiable data for service improvement</td>
+                </tr>
+                <tr>
+                    <td>Support Correspondence</td>
+                    <td>Up to 3 years</td>
+                    <td>Legal compliance and dispute resolution</td>
+                </tr>
+            </table>
+            <p style="margin-top: 15px;"><em>Note: Retained data cannot be used to identify you personally after account deletion.</em></p>
+        </div>
+
+        <div class="warning-box">
+            <h3>⚠️ Important Notice</h3>
+            <ul>
+                <li>Account deletion is <strong>permanent and irreversible</strong></li>
+                <li>All your learning progress and achievements will be lost</li>
+                <li>You will not be able to recover your account or data after deletion</li>
+                <li>If you have an active subscription, please cancel it before deleting your account</li>
+                <li>You can create a new account anytime, but your previous data cannot be restored</li>
+            </ul>
+        </div>
+
+        <h2>For OAuth Users (Google Sign-In)</h2>
+        <div class="info-box">
+            <p>If you signed up using <strong>Google Sign-In</strong> or other OAuth providers:</p>
+            <ul>
+                <li>You can still delete your Selm account using the methods above</li>
+                <li>Deleting your Selm account does <strong>not</strong> affect your Google account</li>
+                <li>To revoke Selm's access to your Google account, visit your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">Google Account Permissions</a></li>
+            </ul>
+        </div>
+
+        <div class="contact-section">
+            <h3>Need Help?</h3>
+            <p>If you have any questions about account deletion or your data, please contact us:</p>
+            <ul>
+                <li><strong>Email:</strong> <a href="mailto:selmapp2022@gmail.com">selmapp2022@gmail.com</a></li>
+                <li><strong>Phone:</strong> <a href="tel:+16047178543">+1 (604) 717-8543</a></li>
+            </ul>
+            <p><strong>Company:</strong> SELM MOBILE APPLICATION INC.<br>
+            <strong>Address:</strong> 1188 West Pender, Vancouver, BC, Canada V6E 0A2</p>
+        </div>
+
+        <div class="footer">
+            <p>&copy; 2024 SELM MOBILE APPLICATION INC. All rights reserved.</p>
+            <p><a href="https://sites.google.com/view/selmapp-privacy-policy/home" target="_blank" rel="noopener noreferrer">Privacy Policy</a></p>
+        </div>
+    </div>
+</body>
+</html>
+
