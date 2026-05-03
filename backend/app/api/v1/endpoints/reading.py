@@ -22,7 +22,8 @@ from app.schemas.reading import (
     ReadingStatistics, ReadingAnalytics, ReadingDashboard
 )
 from app.services.ai_service import AIService
-from datetime import datetime, timedelta
+from app.crud.progress import user_progress_crud
+from datetime import datetime, timedelta, date
 
 router = APIRouter()
 ai_service = AIService()
@@ -229,6 +230,14 @@ async def submit_reading_exercise(
     await reading_progress.update_reading_stats(
         db, user_id=current_user.id, reading_attempt=attempt
     )
+
+    # Update overall study streak
+    try:
+        await user_progress_crud.update_streak(
+            db, user_id=current_user.id, study_date=date.today()
+        )
+    except Exception:
+        pass
     
     return ReadingAttemptResponse(
         id=attempt.id,

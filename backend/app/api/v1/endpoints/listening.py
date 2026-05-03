@@ -1,4 +1,5 @@
 from typing import List, Optional, Dict, Any
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -8,6 +9,7 @@ from app.crud.listening import (
     crud_audio_content, crud_listening_exercise,
     crud_listening_attempt, crud_listening_exercise_attempt, crud_listening_progress
 )
+from app.crud.progress import user_progress_crud
 from app.models.listening import AudioType, DifficultyLevel, ExerciseType
 from app.schemas.listening import (
     # Audio Content
@@ -765,7 +767,15 @@ async def submit_listening_exercise(
     await crud_listening_progress.update_progress(
         db, user_id=current_user.id, attempt=completed_attempt
     )
-    
+
+    # Update overall study streak (any completed activity counts toward streak)
+    try:
+        await user_progress_crud.update_streak(
+            db, user_id=current_user.id, study_date=date.today()
+        )
+    except Exception as e:
+        logger.warning(f"update_streak failed (listening submit): {e}")
+
     # Get detailed results
     answers = await crud_answer.get_by_attempt(db, attempt.id)
     

@@ -411,3 +411,72 @@ async def get_streak_info(
         "next_milestone": next_milestone,
         "days_to_next_milestone": (next_milestone - user_progress.current_streak_days) if next_milestone else 0
     } 
+
+@router.put("/daily-goal", response_model=dict)
+async def update_daily_goal(
+    minutes: int = Query(..., ge=1, le=600, description="Daily study goal in minutes (1-600)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Update the user's daily study goal (in minutes)."""
+    current_user.daily_goal_minutes = minutes
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+    return {
+        "daily_goal_minutes": current_user.daily_goal_minutes,
+        "message": "Daily goal updated",
+    }
+
+
+@router.get("/today", response_model=dict)
+async def get_today_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Unified today view: streak + today's study minutes + daily goal status."""
+    today = date.today()
+    user_progress = await user_progress_crud.get_by_user(db, user_id=current_user.id)
+    daily = await daily_progress_crud.get_by_user_and_date(db, user_id=current_user.id, date=today)
+
+    goal_minutes = int(getattr(current_user, "daily_goal_minutes", 0) or 0)
+    today_minutes = int(getattr(daily, "study_time_minutes", 0) or 0) if daily else 0
+    progress_pct = round((today_minutes / goal_minutes * 100), 1) if goal_minutes > 0 else 0.0
+    if progress_pct > 100:
+        progress_pct = 100.0
+
+    current_streak = user_progress.current_streak_days if user_progress else 0
+    longest_streak = user_progress.longest_streak_days if user_progress else 0
+    last_study = (
+        user_progress.last_study_date.date().isoformat()
+        if user_progress and user_progress.last_study_date else None
+    )
+
+    # Streak today? (last study date == today)
+    streak_active_today = (
+        user_progress is not None
+        and user_progress.last_study_date is not None
+        and user_progress.last_study_date.date() == today
+    )
+
+    return {
+        "date": today.isoformat(),
+        "streak": {
+            "current": current_streak,
+            "longest": longest_streak,
+            "last_study_date": last_study,
+            "active_today": streak_active_today,
+        },
+        "daily_goal": {
+            "goal_minutes": goal_minutes,
+            "minutes_today": today_minutes,
+            "progress_percentage": progress_pct,
+            "goal_met": today_minutes >= goal_minutes if goal_minutes > 0 else False,
+            "remaining_minutes": max(0, goal_minutes - today_minutes),
+        },
+        "today": {
+            "exercises_completed": int(getattr(daily, "exercises_completed", 0) or 0) if daily else 0,
+            "points_earned": int(getattr(daily, "points_earned", 0) or 0) if daily else 0,
+            "accuracy_rate": float(getattr(daily, "accuracy_rate", 0.0) or 0.0) if daily else 0.0,
+        },
+    }
