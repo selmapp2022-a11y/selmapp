@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/di/injection_container.dart' as di;
 import '../../../core/services/progress_service.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -12,12 +14,15 @@ class _DashboardPageState extends State<DashboardPage> {
   static const Color _bg = Color(0xFF0C1C2C);
   static const Color _accent = Color(0xFF2DD4BF);
   static const Color _muted = Color(0xFF6B7B8C);
+  late final ApiClient _api = di.sl<ApiClient>();
   ProgressSummary? _summary;
+  Map<String, dynamic>? _today;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadToday();
     ProgressService.instance.addListener(_onProgress);
   }
 
@@ -27,11 +32,18 @@ class _DashboardPageState extends State<DashboardPage> {
     super.dispose();
   }
 
-  void _onProgress(_) => _load();
+  void _onProgress(_) { _load(); _loadToday(); }
 
   Future<void> _load() async {
     final s = await ProgressService.instance.getSummary();
     if (mounted) setState(() => _summary = s);
+  }
+
+  Future<void> _loadToday() async {
+    try {
+      final r = await _api.get('/progress/today');
+      if (mounted && r.data is Map) setState(() => _today = Map<String, dynamic>.from(r.data));
+    } catch (_) {}
   }
 
   @override
@@ -66,6 +78,10 @@ class _DashboardPageState extends State<DashboardPage> {
                   style: TextStyle(color: _muted, fontSize: 14)),
               const SizedBox(height: 20),
               if (s != null) _xpCard(s),
+              if (_today != null) ...[
+                const SizedBox(height: 12),
+                _todayCard(_today!),
+              ],
               const SizedBox(height: 20),
               GridView.count(
                 shrinkWrap: true,
@@ -137,6 +153,60 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
   }
+
+  Widget _todayCard(Map<String, dynamic> t) {
+    final goal = (t['daily_goal'] is Map ? Map<String, dynamic>.from(t['daily_goal']) : <String, dynamic>{});
+    final streak = (t['streak'] is Map ? Map<String, dynamic>.from(t['streak']) : <String, dynamic>{});
+    final vocab = (t['vocabulary'] is Map ? Map<String, dynamic>.from(t['vocabulary']) : <String, dynamic>{});
+    final goalMin = (goal['goal_minutes'] as num?)?.toInt() ?? 0;
+    final todayMin = (goal['minutes_today'] as num?)?.toInt() ?? 0;
+    final pct = ((goal['progress_percentage'] as num?)?.toDouble() ?? 0) / 100;
+    final met = goal['goal_met'] == true;
+    final due = (vocab['due_reviews'] as num?)?.toInt() ?? 0;
+    final serverStreak = (streak['current'] as num?)?.toInt() ?? 0;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          const Expanded(child: Text("Today's goal",
+              style: TextStyle(color: Color(0xFF0C1C2C), fontSize: 15, fontWeight: FontWeight.w800))),
+          if (met) Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(10)),
+            child: const Text('✓ Met', style: TextStyle(color: Color(0xFF047857), fontSize: 11, fontWeight: FontWeight.w800)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        if (goalMin > 0) ...[
+          ClipRRect(borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(value: pct.clamp(0.0, 1.0), minHeight: 6,
+              backgroundColor: const Color(0xFFE2E8F0), valueColor: const AlwaysStoppedAnimation<Color>(_accent))),
+          const SizedBox(height: 4),
+          Text('$todayMin / $goalMin minutes today',
+              style: const TextStyle(color: _muted, fontSize: 12)),
+        ] else
+          const Text('Set a daily goal in your profile to track progress.',
+              style: TextStyle(color: _muted, fontSize: 12)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: _miniStat('🔥', '$serverStreak', 'streak')),
+          Expanded(child: _miniStat('💡', '$due', 'words due')),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _miniStat(String emoji, String value, String label) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Text(emoji, style: const TextStyle(fontSize: 16)),
+      const SizedBox(width: 6),
+      Text(value, style: const TextStyle(color: Color(0xFF0C1C2C), fontWeight: FontWeight.w800, fontSize: 16)),
+      const SizedBox(width: 4),
+      Text(label, style: const TextStyle(color: _muted, fontSize: 11)),
+    ]),
+  );
 
   Widget _skillCard(String emoji, String title, String desc, VoidCallback onTap) {
     return GestureDetector(
