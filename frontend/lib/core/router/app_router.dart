@@ -164,11 +164,6 @@ class AppRouter {
       return null;
     }
 
-    // TEMP screenshot bypass (build23 brand QA). Gated on secret token.
-    if (qp['_preview'] == 'selm2026qa') {
-      return null;
-    }
-
     try {
       // Get auth service from dependency injection
       final authService = di.sl<AuthService>();
