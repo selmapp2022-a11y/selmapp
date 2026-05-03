@@ -18,7 +18,8 @@ import '../../features/profile/presentation/pages/profile_page.dart';
 import '../../features/exercises/presentation/pages/exercises_page.dart';
 import '../../features/progress/presentation/pages/progress_page.dart';
 import '../../features/practice/presentation/pages/direct_skill_practice_page.dart';
-import '../../features/onboarding/presentation/pages/onboarding_main_page.dart';
+import '../../features/onboarding/presentation/pages/onboarding_profile_page.dart';
+import '../../features/onboarding/presentation/pages/onboarding_assessment_page.dart';
 import '../../features/settings/presentation/pages/privacy_policy_page.dart';
 import '../../features/settings/presentation/pages/terms_of_service_page.dart';
 import '../../features/settings/presentation/pages/contact_support_page.dart';
@@ -265,7 +266,12 @@ class AppRouter {
       GoRoute(
         path: '/onboarding',
         name: 'onboarding',
-        builder: (context, state) => const OnboardingMainPage(),
+        builder: (context, state) => const OnboardingProfilePage(),
+      ),
+      GoRoute(
+        path: '/onboarding/assessment',
+        name: 'onboarding-assessment',
+        builder: (context, state) => const OnboardingAssessmentPage(),
       ),
       
       // OAuth callback route for deep links (selmapp://oauth/callback?...)
