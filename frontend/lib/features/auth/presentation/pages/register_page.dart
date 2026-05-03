@@ -1,8 +1,6 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
@@ -25,12 +23,10 @@ class _RegisterPageState extends State<RegisterPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
-  bool _obscureConfirmPassword = true;
-  bool _agreeToTerms = false;
 
   late final AuthService _authService;
 
@@ -44,21 +40,13 @@ class _RegisterPageState extends State<RegisterPage> {
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _usernameController.dispose();
     _passwordController.dispose();
-    _confirmPasswordController.dispose();
     super.dispose();
   }
 
   Future<void> _handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
-    if (!_agreeToTerms) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please agree to the terms and conditions'),
-        ),
-      );
-      return;
-    }
     setState(() => _isLoading = true);
     try {
       final isConnected = await _authService.testConnectivity();
@@ -108,13 +96,6 @@ class _RegisterPageState extends State<RegisterPage> {
     }
   }
 
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -125,9 +106,9 @@ class _RegisterPageState extends State<RegisterPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               _buildBrand(),
-              const SizedBox(height: 28),
+              const SizedBox(height: 24),
               _buildCard(),
               const SizedBox(height: 24),
             ],
@@ -199,46 +180,44 @@ class _RegisterPageState extends State<RegisterPage> {
                 style: TextStyle(
                     color: _accent, fontSize: 26, fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
-            const Text('Start your English journey with SELM.',
+            const Text('Personal English coaching, powered by AI.',
                 style: TextStyle(color: Color(0xFF6B7B8C), fontSize: 15)),
             const SizedBox(height: 22),
             _label('Full name'),
             const SizedBox(height: 8),
-            TextFormField(
-              controller: _nameController,
-              textInputAction: TextInputAction.next,
-              style: const TextStyle(color: Colors.white, fontSize: 15),
-              decoration: _inputDecoration(hint: 'Your name'),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Please enter your name' : null,
-            ),
+            _field(_nameController, 'Jane Doe',
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Please enter your name'
+                    : null),
             const SizedBox(height: 16),
             _label('Email'),
             const SizedBox(height: 8),
-            TextFormField(
-              controller: _emailController,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              style: const TextStyle(color: Colors.white, fontSize: 15),
-              decoration: _inputDecoration(hint: 'you@example.com'),
-              validator: (v) {
-                if (v == null || v.isEmpty) return 'Please enter your email';
-                if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v)) {
-                  return 'Please enter a valid email';
-                }
-                return null;
-              },
-            ),
+            _field(_emailController, 'you@example.com',
+                keyboardType: TextInputType.emailAddress, validator: (v) {
+              if (v == null || v.isEmpty) return 'Please enter your email';
+              if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v)) {
+                return 'Please enter a valid email';
+              }
+              return null;
+            }),
+            const SizedBox(height: 16),
+            _label('Username'),
+            const SizedBox(height: 8),
+            _field(_usernameController, 'janedoe',
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Please choose a username'
+                    : null),
             const SizedBox(height: 16),
             _label('Password'),
             const SizedBox(height: 8),
             TextFormField(
               controller: _passwordController,
               obscureText: _obscurePassword,
-              textInputAction: TextInputAction.next,
+              textInputAction: TextInputAction.done,
+              onFieldSubmitted: (_) => _handleRegister(),
               style: const TextStyle(color: Colors.white, fontSize: 15),
               decoration: _inputDecoration(
-                hint: '••••••••',
+                hint: 'At least 8 characters',
                 suffix: IconButton(
                   onPressed: () =>
                       setState(() => _obscurePassword = !_obscurePassword),
@@ -253,50 +232,29 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
               validator: (v) {
                 if (v == null || v.isEmpty) return 'Please enter a password';
-                if (v.length < 6) return 'Password must be at least 6 characters';
+                if (v.length < 8) return 'At least 8 characters';
                 return null;
               },
             ),
-            const SizedBox(height: 16),
-            _label('Confirm password'),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: _confirmPasswordController,
-              obscureText: _obscureConfirmPassword,
-              textInputAction: TextInputAction.done,
-              onFieldSubmitted: (_) => _handleRegister(),
-              style: const TextStyle(color: Colors.white, fontSize: 15),
-              decoration: _inputDecoration(
-                hint: '••••••••',
-                suffix: IconButton(
-                  onPressed: () => setState(() =>
-                      _obscureConfirmPassword = !_obscureConfirmPassword),
-                  icon: Icon(
-                    _obscureConfirmPassword
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                    color: _inputHint,
-                    size: 20,
-                  ),
-                ),
-              ),
-              validator: (v) {
-                if (v == null || v.isEmpty) return 'Please confirm password';
-                if (v != _passwordController.text) {
-                  return 'Passwords do not match';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            _buildTerms(),
-            const SizedBox(height: 18),
+            const SizedBox(height: 22),
             _buildSubmitButton(),
             const SizedBox(height: 16),
             _buildSignInLink(),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _field(TextEditingController c, String hint,
+      {TextInputType? keyboardType, String? Function(String?)? validator}) {
+    return TextFormField(
+      controller: c,
+      keyboardType: keyboardType,
+      textInputAction: TextInputAction.next,
+      style: const TextStyle(color: Colors.white, fontSize: 15),
+      decoration: _inputDecoration(hint: hint),
+      validator: validator,
     );
   }
 
@@ -331,51 +289,6 @@ class _RegisterPageState extends State<RegisterPage> {
         borderRadius: BorderRadius.circular(12),
         borderSide: const BorderSide(color: AppTheme.errorColor),
       ),
-    );
-  }
-
-  Widget _buildTerms() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 24,
-          height: 24,
-          child: Checkbox(
-            value: _agreeToTerms,
-            onChanged: (v) => setState(() => _agreeToTerms = v ?? false),
-            activeColor: _accent,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4)),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text.rich(
-            TextSpan(
-              style: const TextStyle(color: Color(0xFF6B7B8C), fontSize: 13),
-              children: [
-                const TextSpan(text: 'I agree to the '),
-                TextSpan(
-                  text: 'Terms',
-                  style: const TextStyle(
-                      color: _accent, fontWeight: FontWeight.w600),
-                  recognizer: TapGestureRecognizer()
-                    ..onTap = () => _openUrl('https://selmapp.com/terms'),
-                ),
-                const TextSpan(text: ' and '),
-                TextSpan(
-                  text: 'Privacy Policy',
-                  style: const TextStyle(
-                      color: _accent, fontWeight: FontWeight.w600),
-                  recognizer: TapGestureRecognizer()
-                    ..onTap = () => _openUrl('https://selmapp.com/privacy'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 
