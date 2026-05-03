@@ -152,7 +152,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     fontWeight: FontWeight.w800,
                     letterSpacing: 0.5)),
             SizedBox(height: 2),
-            Text('ENGLISH, SIMPLY',
+            Text('ENGLISH LEARNING APP',
                 style: TextStyle(
                     color: Color(0xFFB7C6D6),
                     fontSize: 11,
