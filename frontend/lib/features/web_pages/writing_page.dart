@@ -23,6 +23,8 @@ class _WritingPageState extends State<WritingPage> {
   final _promptCtrl = TextEditingController();
   Timer? _debounce;
   List<_GErr> _errors = [];
+  String? _correctedText;
+  int? _grammarScore;
   bool _checking = false;
   bool _assessing = false;
   Map<String, dynamic>? _assessment;
@@ -39,7 +41,7 @@ class _WritingPageState extends State<WritingPage> {
   void _onChanged(String v) {
     _debounce?.cancel();
     if (v.trim().split(RegExp(r'\s+')).length < 5) {
-      setState(() => _errors = []);
+      setState(() { _errors = []; _correctedText = null; _grammarScore = null; });
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 1200), _checkGrammar);
@@ -51,8 +53,18 @@ class _WritingPageState extends State<WritingPage> {
     setState(() => _checking = true);
     try {
       final r = await _api.post('/ai/grammar-check', data: {'text': text});
-      final p = parseAIContent(r.data) ?? {};
-      final list = ((p['errors'] ?? []) as List).whereType<Map>().map((e) {
+      final raw = r.data is Map ? Map<String, dynamic>.from(r.data) : <String, dynamic>{};
+      // Backend returns: { success, score, corrected_text, corrections[], suggestions[] }
+      // Or nested under content (legacy). Try both.
+      final body = raw['corrected_text'] != null || raw['corrections'] != null
+          ? raw
+          : (parseAIContent(raw) ?? raw);
+      final corrected = body['corrected_text']?.toString();
+      final score = (body['score'] as num?)?.round();
+      final src = (body['corrections'] is List)
+          ? body['corrections'] as List
+          : (body['errors'] is List ? body['errors'] as List : const []);
+      final list = src.whereType<Map>().map((e) {
         final m = Map<String, dynamic>.from(e);
         return _GErr(
           (m['type'] ?? 'grammar').toString(),
@@ -60,11 +72,23 @@ class _WritingPageState extends State<WritingPage> {
           (m['correction'] ?? m['suggestion'] ?? m['replacement'] ?? '').toString(),
           m['explanation']?.toString(),
         );
-      }).toList();
-      if (mounted) setState(() { _errors = list; _checking = false; });
+      }).where((e) => e.text.isNotEmpty).toList();
+      if (mounted) setState(() {
+        _errors = list;
+        _correctedText = (corrected != null && corrected.trim().isNotEmpty && corrected.trim() != text) ? corrected : null;
+        _grammarScore = score;
+        _checking = false;
+      });
     } catch (_) {
       if (mounted) setState(() => _checking = false);
     }
+  }
+
+  void _applyCorrection() {
+    if (_correctedText == null) return;
+    _ctrl.text = _correctedText!;
+    _ctrl.selection = TextSelection.fromPosition(TextPosition(offset: _ctrl.text.length));
+    setState(() { _correctedText = null; _errors = []; });
   }
 
   Future<void> _assess() async {
@@ -131,6 +155,32 @@ class _WritingPageState extends State<WritingPage> {
             const SizedBox(height: 14),
             primaryButton(label: 'Assess writing', icon: Icons.fact_check_outlined, onPressed: _assess, loading: _assessing),
           ])),
+          if (_correctedText != null) ...[
+            const SizedBox(height: 12),
+            whiteCard(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                const Expanded(child: Text('AI corrected version',
+                    style: TextStyle(color: kInk, fontSize: 14, fontWeight: FontWeight.w800))),
+                if (_grammarScore != null) Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: scoreBg(_grammarScore!), borderRadius: BorderRadius.circular(10)),
+                  child: Text('${_grammarScore!}/100', style: TextStyle(color: scoreFg(_grammarScore!), fontSize: 11, fontWeight: FontWeight.w800)),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              Container(padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFFF1FAF8), borderRadius: BorderRadius.circular(10),
+                  border: const Border(left: BorderSide(color: kAccent, width: 3))),
+                child: Text(_correctedText!, style: const TextStyle(color: kInk, fontSize: 14, height: 1.5))),
+              const SizedBox(height: 10),
+              SizedBox(width: double.infinity, child: OutlinedButton.icon(
+                onPressed: _applyCorrection,
+                icon: const Icon(Icons.auto_fix_high, color: kAccent, size: 18),
+                label: const Text('Use corrected version', style: TextStyle(color: kAccent, fontWeight: FontWeight.w700)),
+                style: OutlinedButton.styleFrom(side: const BorderSide(color: kAccent), padding: const EdgeInsets.symmetric(vertical: 12)),
+              )),
+            ])),
+          ],
           if (_errors.isNotEmpty) ...[
             const SizedBox(height: 12),
             whiteCard(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
