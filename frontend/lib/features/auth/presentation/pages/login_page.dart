@@ -145,7 +145,7 @@ class _LoginPageState extends State<LoginPage> {
             ),
             SizedBox(height: 2),
             Text(
-              'ENGLISH, SIMPLY',
+              'ENGLISH LEARNING APP',
               style: TextStyle(
                 color: Color(0xFFB7C6D6),
                 fontSize: 11,
