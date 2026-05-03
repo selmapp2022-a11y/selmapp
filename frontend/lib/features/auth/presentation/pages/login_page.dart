@@ -15,10 +15,14 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  static const Color _bg = Color(0xFF0C1C2C);
-  static const Color _accent = Color(0xFF2DD4BF);
-  static const Color _inputFill = Color(0xFF132A40);
-  static const Color _inputHint = Color(0xFF7A8FA3);
+  // SELM Brand v1.0
+  static const Color _bg = Color(0xFFF8F8F8);
+  static const Color _navy = Color(0xFF183048);
+  static const Color _accent = Color(0xFF2EC4B6);
+  static const Color _textPrimary = Color(0xFF0B0F14);
+  static const Color _textSecondary = Color(0xFF5B6670);
+  static const Color _border = Color(0xFFC0C6CC);
+  static const Color _muted = Color(0xFFE7EBEF);
 
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
@@ -89,17 +93,22 @@ class _LoginPageState extends State<LoginPage> {
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 40),
-              _buildBrand(),
-              const SizedBox(height: 36),
-              _buildCard(),
-              const SizedBox(height: 24),
-            ],
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 24),
+                  _buildBrand(),
+                  const SizedBox(height: 28),
+                  _buildCard(),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -112,20 +121,21 @@ class _LoginPageState extends State<LoginPage> {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Container(
-          width: 44,
-          height: 44,
+          width: 48,
+          height: 48,
           decoration: BoxDecoration(
-            color: const Color(0xFF1A3346),
-            borderRadius: BorderRadius.circular(10),
+            color: _navy,
+            borderRadius: BorderRadius.circular(11),
           ),
           alignment: Alignment.center,
           child: const Text(
             'S',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 26,
+              fontSize: 28,
               fontWeight: FontWeight.w800,
-              fontStyle: FontStyle.italic,
+              fontFamily: 'Poppins',
+              height: 1.0,
             ),
           ),
         ),
@@ -137,20 +147,22 @@ class _LoginPageState extends State<LoginPage> {
             Text(
               'SELM',
               style: TextStyle(
-                color: _accent,
+                color: _navy,
                 fontSize: 26,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
+                fontFamily: 'Poppins',
+                height: 1.0,
               ),
             ),
-            SizedBox(height: 2),
+            SizedBox(height: 4),
             Text(
               'ENGLISH LEARNING APP',
               style: TextStyle(
-                color: Color(0xFFB7C6D6),
-                fontSize: 11,
-                letterSpacing: 2.0,
-                fontWeight: FontWeight.w500,
+                color: _textSecondary,
+                fontSize: 10,
+                letterSpacing: 2.4,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
@@ -161,10 +173,18 @@ class _LoginPageState extends State<LoginPage> {
 
   Widget _buildCard() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(22, 28, 22, 22),
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _muted, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Form(
         key: _formKey,
@@ -174,30 +194,31 @@ class _LoginPageState extends State<LoginPage> {
             const Text(
               'Welcome back',
               style: TextStyle(
-                color: _accent,
-                fontSize: 28,
-                fontWeight: FontWeight.w800,
+                color: _navy,
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'Poppins',
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             const Text(
               'Sign in to continue your English journey.',
               style: TextStyle(
-                color: Color(0xFF6B7B8C),
-                fontSize: 15,
+                color: _textSecondary,
+                fontSize: 14,
               ),
             ),
             const SizedBox(height: 22),
             _label('Email'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             _buildEmailField(),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
             _label('Password'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             _buildPasswordField(),
             const SizedBox(height: 22),
             _buildSignInButton(),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
             _buildSignUpLink(),
           ],
         ),
@@ -208,35 +229,35 @@ class _LoginPageState extends State<LoginPage> {
   Widget _label(String text) => Text(
         text,
         style: const TextStyle(
-          color: Color(0xFF8A99AC),
+          color: _textSecondary,
           fontSize: 13,
-          fontWeight: FontWeight.w500,
+          fontWeight: FontWeight.w600,
         ),
       );
 
   InputDecoration _inputDecoration({String? hint, Widget? suffix}) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: _inputHint, fontSize: 15),
+      hintStyle: const TextStyle(color: Color(0xFF9AA4AE), fontSize: 15),
       suffixIcon: suffix,
       filled: true,
-      fillColor: _inputFill,
+      fillColor: Colors.white,
       contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _border),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _border),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _accent, width: 1.5),
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _navy, width: 1.6),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         borderSide: const BorderSide(color: AppTheme.errorColor),
       ),
     );
@@ -247,7 +268,7 @@ class _LoginPageState extends State<LoginPage> {
       controller: _emailController,
       keyboardType: TextInputType.emailAddress,
       textInputAction: TextInputAction.next,
-      style: const TextStyle(color: Colors.white, fontSize: 15),
+      style: const TextStyle(color: _textPrimary, fontSize: 15),
       decoration: _inputDecoration(hint: 'you@example.com'),
       validator: (value) {
         if (value == null || value.isEmpty) return 'Please enter your email';
@@ -265,7 +286,7 @@ class _LoginPageState extends State<LoginPage> {
       obscureText: _obscurePassword,
       textInputAction: TextInputAction.done,
       onFieldSubmitted: (_) => _handleLogin(),
-      style: const TextStyle(color: Colors.white, fontSize: 15),
+      style: const TextStyle(color: _textPrimary, fontSize: 15),
       decoration: _inputDecoration(
         hint: '••••••••',
         suffix: IconButton(
@@ -275,7 +296,7 @@ class _LoginPageState extends State<LoginPage> {
             _obscurePassword
                 ? Icons.visibility_outlined
                 : Icons.visibility_off_outlined,
-            color: _inputHint,
+            color: _textSecondary,
             size: 20,
           ),
         ),
@@ -295,7 +316,7 @@ class _LoginPageState extends State<LoginPage> {
       child: ElevatedButton(
         onPressed: _isLoading ? null : _handleLogin,
         style: ElevatedButton.styleFrom(
-          backgroundColor: _bg,
+          backgroundColor: _navy,
           foregroundColor: Colors.white,
           elevation: 0,
           shape: RoundedRectangleBorder(
@@ -316,6 +337,7 @@ class _LoginPageState extends State<LoginPage> {
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
+                  fontFamily: 'Poppins',
                 ),
               ),
       ),
@@ -328,7 +350,7 @@ class _LoginPageState extends State<LoginPage> {
       children: [
         const Text(
           'New to SELM? ',
-          style: TextStyle(color: Color(0xFF8A99AC), fontSize: 14),
+          style: TextStyle(color: _textSecondary, fontSize: 14),
         ),
         GestureDetector(
           onTap: () => context.go('/register'),
