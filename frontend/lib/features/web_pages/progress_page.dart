@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/di/injection_container.dart' as di;
 import '../../../core/services/progress_service.dart';
 import '_shared.dart';
 
@@ -9,13 +11,16 @@ class ProgressPageV2 extends StatefulWidget {
 }
 
 class _ProgressPageV2State extends State<ProgressPageV2> {
+  late final ApiClient _api = di.sl<ApiClient>();
   ProgressSummary? _summary;
   List<Map<String, dynamic>> _ach = [];
+  Map<String, dynamic>? _weekly;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadWeekly();
     ProgressService.instance.addListener(_onP);
   }
 
@@ -25,12 +30,19 @@ class _ProgressPageV2State extends State<ProgressPageV2> {
     super.dispose();
   }
 
-  void _onP(_) => _load();
+  void _onP(_) { _load(); _loadWeekly(); }
 
   Future<void> _load() async {
     final s = await ProgressService.instance.getSummary();
     final a = await ProgressService.instance.getAchievements();
     if (mounted) setState(() { _summary = s; _ach = a; });
+  }
+
+  Future<void> _loadWeekly() async {
+    try {
+      final r = await _api.get('/progress/weekly-summary');
+      if (mounted && r.data is Map) setState(() => _weekly = Map<String, dynamic>.from(r.data));
+    } catch (_) {}
   }
 
   @override
@@ -44,6 +56,10 @@ class _ProgressPageV2State extends State<ProgressPageV2> {
             padding: const EdgeInsets.all(20),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               _topCard(_summary!),
+              if (_weekly != null) ...[
+                const SizedBox(height: 16),
+                _weeklyCard(_weekly!),
+              ],
               const SizedBox(height: 16),
               _skillsCard(_summary!),
               const SizedBox(height: 16),
@@ -123,6 +139,66 @@ class _ProgressPageV2State extends State<ProgressPageV2> {
         ]),
       ])),
     ];
+  }
+
+  Widget _weeklyCard(Map<String, dynamic> w) {
+    final days = (w['days'] as List? ?? []).whereType<Map>().map((d) => Map<String, dynamic>.from(d)).toList();
+    final totals = (w['totals'] is Map ? Map<String, dynamic>.from(w['totals']) : <String, dynamic>{});
+    final trend = (w['trend_vs_previous_week'] is Map ? Map<String, dynamic>.from(w['trend_vs_previous_week']) : <String, dynamic>{});
+    final best = (w['best_day'] is Map ? Map<String, dynamic>.from(w['best_day']) : null);
+    final goalMin = (w['daily_goal_minutes'] as num?)?.toInt() ?? 0;
+    final maxMin = days.fold<int>(0, (a, d) {
+      final m = (d['minutes'] as num?)?.toInt() ?? 0;
+      return m > a ? m : a;
+    });
+    final scaleMax = [maxMin, goalMin, 10].reduce((a, b) => a > b ? a : b);
+    final deltaPct = trend['minutes_change_percent'];
+    return whiteCard(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        const Expanded(child: Text('This week', style: TextStyle(color: kInk, fontSize: 16, fontWeight: FontWeight.w800))),
+        if (deltaPct is num) Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: deltaPct >= 0 ? const Color(0xFFD1FAE5) : const Color(0xFFFEE2E2),
+            borderRadius: BorderRadius.circular(10)),
+          child: Text('${deltaPct >= 0 ? '↑' : '↓'} ${deltaPct.abs().toStringAsFixed(0)}% vs last week',
+              style: TextStyle(color: deltaPct >= 0 ? const Color(0xFF047857) : const Color(0xFFB91C1C),
+                  fontSize: 11, fontWeight: FontWeight.w800)),
+        ),
+      ]),
+      const SizedBox(height: 14),
+      SizedBox(
+        height: 110,
+        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: days.map((d) {
+          final m = (d['minutes'] as num?)?.toInt() ?? 0;
+          final met = d['goal_met'] == true;
+          final h = scaleMax > 0 ? (m / scaleMax * 80).clamp(2.0, 80.0) : 2.0;
+          final wd = (d['weekday'] as String? ?? '').substring(0, 1).toUpperCase();
+          return Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+              Text('${m}m', style: TextStyle(color: m > 0 ? kInk : kMuted, fontSize: 9, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Container(height: h.toDouble(),
+                decoration: BoxDecoration(
+                  color: met ? kAccent : (m > 0 ? kAccent.withValues(alpha: 0.4) : const Color(0xFFE2E8F0)),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(4)))),
+              const SizedBox(height: 4),
+              Text(wd, style: const TextStyle(color: kMuted, fontSize: 11, fontWeight: FontWeight.w600)),
+            ])));
+        }).toList()),
+      ),
+      const SizedBox(height: 12),
+      Row(children: [
+        Expanded(child: _stat('${totals['minutes'] ?? 0}m', 'Minutes')),
+        Expanded(child: _stat('${totals['exercises'] ?? 0}', 'Exercises')),
+        Expanded(child: _stat('${totals['goal_met_days'] ?? 0}/7', 'Goal hit')),
+      ]),
+      if (best != null && (best['minutes'] as num?) != null && (best['minutes'] as num) > 0) ...[
+        const SizedBox(height: 8),
+        Center(child: Text('🏆 Best day: ${best['weekday']} (${best['minutes']}m)',
+            style: const TextStyle(color: kMuted, fontSize: 12))),
+      ],
+    ]));
   }
 
   Widget _achCard() {
