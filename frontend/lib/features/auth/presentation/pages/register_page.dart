@@ -15,10 +15,14 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
-  static const Color _bg = Color(0xFF0C1C2C);
-  static const Color _accent = Color(0xFF2DD4BF);
-  static const Color _inputFill = Color(0xFF132A40);
-  static const Color _inputHint = Color(0xFF7A8FA3);
+  // SELM Brand v1.0
+  static const Color _bg = Color(0xFFF8F8F8);
+  static const Color _navy = Color(0xFF183048);
+  static const Color _accent = Color(0xFF2EC4B6);
+  static const Color _textPrimary = Color(0xFF0B0F14);
+  static const Color _textSecondary = Color(0xFF5B6670);
+  static const Color _border = Color(0xFFC0C6CC);
+  static const Color _muted = Color(0xFFE7EBEF);
 
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
@@ -101,17 +105,22 @@ class _RegisterPageState extends State<RegisterPage> {
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 16),
-              _buildBrand(),
-              const SizedBox(height: 24),
-              _buildCard(),
-              const SizedBox(height: 24),
-            ],
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 16),
+                  _buildBrand(),
+                  const SizedBox(height: 24),
+                  _buildCard(),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -123,20 +132,21 @@ class _RegisterPageState extends State<RegisterPage> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Container(
-          width: 44,
-          height: 44,
+          width: 48,
+          height: 48,
           decoration: BoxDecoration(
-            color: const Color(0xFF1A3346),
-            borderRadius: BorderRadius.circular(10),
+            color: _navy,
+            borderRadius: BorderRadius.circular(11),
           ),
           alignment: Alignment.center,
           child: const Text(
             'S',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 26,
+              fontSize: 28,
               fontWeight: FontWeight.w800,
-              fontStyle: FontStyle.italic,
+              fontFamily: 'Poppins',
+              height: 1.0,
             ),
           ),
         ),
@@ -147,17 +157,19 @@ class _RegisterPageState extends State<RegisterPage> {
           children: const [
             Text('SELM',
                 style: TextStyle(
-                    color: _accent,
+                    color: _navy,
                     fontSize: 26,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5)),
-            SizedBox(height: 2),
+                    letterSpacing: 0.5,
+                    fontFamily: 'Poppins',
+                    height: 1.0)),
+            SizedBox(height: 4),
             Text('ENGLISH LEARNING APP',
                 style: TextStyle(
-                    color: Color(0xFFB7C6D6),
-                    fontSize: 11,
-                    letterSpacing: 2.0,
-                    fontWeight: FontWeight.w500)),
+                    color: _textSecondary,
+                    fontSize: 10,
+                    letterSpacing: 2.4,
+                    fontWeight: FontWeight.w600)),
           ],
         ),
       ],
@@ -166,10 +178,18 @@ class _RegisterPageState extends State<RegisterPage> {
 
   Widget _buildCard() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(22, 26, 22, 22),
+      padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _muted, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Form(
         key: _formKey,
@@ -178,20 +198,23 @@ class _RegisterPageState extends State<RegisterPage> {
           children: [
             const Text('Create your account',
                 style: TextStyle(
-                    color: _accent, fontSize: 26, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
+                    color: _navy,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'Poppins')),
+            const SizedBox(height: 6),
             const Text('Personal English coaching, powered by AI.',
-                style: TextStyle(color: Color(0xFF6B7B8C), fontSize: 15)),
-            const SizedBox(height: 22),
+                style: TextStyle(color: _textSecondary, fontSize: 14)),
+            const SizedBox(height: 20),
             _label('Full name'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             _field(_nameController, 'Jane Doe',
                 validator: (v) => (v == null || v.trim().isEmpty)
                     ? 'Please enter your name'
                     : null),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _label('Email'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             _field(_emailController, 'you@example.com',
                 keyboardType: TextInputType.emailAddress, validator: (v) {
               if (v == null || v.isEmpty) return 'Please enter your email';
@@ -200,22 +223,22 @@ class _RegisterPageState extends State<RegisterPage> {
               }
               return null;
             }),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _label('Username'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             _field(_usernameController, 'janedoe',
                 validator: (v) => (v == null || v.trim().isEmpty)
                     ? 'Please choose a username'
                     : null),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _label('Password'),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             TextFormField(
               controller: _passwordController,
               obscureText: _obscurePassword,
               textInputAction: TextInputAction.done,
               onFieldSubmitted: (_) => _handleRegister(),
-              style: const TextStyle(color: Colors.white, fontSize: 15),
+              style: const TextStyle(color: _textPrimary, fontSize: 15),
               decoration: _inputDecoration(
                 hint: 'At least 8 characters',
                 suffix: IconButton(
@@ -225,7 +248,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     _obscurePassword
                         ? Icons.visibility_outlined
                         : Icons.visibility_off_outlined,
-                    color: _inputHint,
+                    color: _textSecondary,
                     size: 20,
                   ),
                 ),
@@ -252,7 +275,7 @@ class _RegisterPageState extends State<RegisterPage> {
       controller: c,
       keyboardType: keyboardType,
       textInputAction: TextInputAction.next,
-      style: const TextStyle(color: Colors.white, fontSize: 15),
+      style: const TextStyle(color: _textPrimary, fontSize: 15),
       decoration: _inputDecoration(hint: hint),
       validator: validator,
     );
@@ -260,33 +283,33 @@ class _RegisterPageState extends State<RegisterPage> {
 
   Widget _label(String text) => Text(text,
       style: const TextStyle(
-          color: Color(0xFF8A99AC),
+          color: _textSecondary,
           fontSize: 13,
-          fontWeight: FontWeight.w500));
+          fontWeight: FontWeight.w600));
 
   InputDecoration _inputDecoration({String? hint, Widget? suffix}) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: _inputHint, fontSize: 15),
+      hintStyle: const TextStyle(color: Color(0xFF9AA4AE), fontSize: 15),
       suffixIcon: suffix,
       filled: true,
-      fillColor: _inputFill,
+      fillColor: Colors.white,
       contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _border),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _border),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _accent, width: 1.5),
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _navy, width: 1.6),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         borderSide: const BorderSide(color: AppTheme.errorColor),
       ),
     );
@@ -299,7 +322,7 @@ class _RegisterPageState extends State<RegisterPage> {
       child: ElevatedButton(
         onPressed: _isLoading ? null : _handleRegister,
         style: ElevatedButton.styleFrom(
-          backgroundColor: _bg,
+          backgroundColor: _navy,
           foregroundColor: Colors.white,
           elevation: 0,
           shape: RoundedRectangleBorder(
@@ -315,7 +338,10 @@ class _RegisterPageState extends State<RegisterPage> {
                 ),
               )
             : const Text('Create account',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Poppins')),
       ),
     );
   }
@@ -325,7 +351,7 @@ class _RegisterPageState extends State<RegisterPage> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         const Text('Already have an account? ',
-            style: TextStyle(color: Color(0xFF8A99AC), fontSize: 14)),
+            style: TextStyle(color: _textSecondary, fontSize: 14)),
         GestureDetector(
           onTap: () => context.go('/welcome'),
           child: const Text('Sign in',
