@@ -27,6 +27,13 @@ import '../../features/admin/presentation/pages/admin_dashboard_page.dart';
 import '../../features/admin/presentation/pages/admin_users_page.dart';
 import '../../features/admin/presentation/pages/admin_reports_page.dart';
 import '../../features/admin/presentation/pages/admin_settings_page.dart';
+import '../../features/web_pages/dashboard_page.dart';
+import '../../features/web_pages/vocabulary_page.dart';
+import '../../features/web_pages/listening_page.dart';
+import '../../features/web_pages/reading_page.dart';
+import '../../features/web_pages/writing_page.dart';
+import '../../features/web_pages/speaking_page.dart';
+import '../../features/web_pages/progress_page.dart';
 import '../di/injection_container.dart' as di;
 import '../services/auth_service.dart';
 import '../services/oauth_service.dart';
@@ -324,7 +331,42 @@ class AppRouter {
       GoRoute(
         path: '/home',
         name: 'home',
+        builder: (context, state) => const DashboardPage(),
+      ),
+      GoRoute(
+        path: '/dashboard',
+        name: 'dashboard',
+        builder: (context, state) => const DashboardPage(),
+      ),
+      GoRoute(
+        path: '/home-classic',
+        name: 'home-classic',
         builder: (context, state) => const HomePage(),
+      ),
+      GoRoute(
+        path: '/vocabulary',
+        name: 'vocabulary',
+        builder: (context, state) => const VocabularyPage(),
+      ),
+      GoRoute(
+        path: '/listening',
+        name: 'listening',
+        builder: (context, state) => const ListeningPage(),
+      ),
+      GoRoute(
+        path: '/reading',
+        name: 'reading',
+        builder: (context, state) => const ReadingPage(),
+      ),
+      GoRoute(
+        path: '/writing',
+        name: 'writing',
+        builder: (context, state) => const WritingPage(),
+      ),
+      GoRoute(
+        path: '/speaking',
+        name: 'speaking',
+        builder: (context, state) => const SpeakingPage(),
       ),
       GoRoute(
         path: '/lessons',
@@ -341,6 +383,11 @@ class AppRouter {
       GoRoute(
         path: '/progress',
         name: 'progress',
+        builder: (context, state) => const ProgressPageV2(),
+      ),
+      GoRoute(
+        path: '/progress-classic',
+        name: 'progress-classic',
         builder: (context, state) => const ProgressPage(),
       ),
       GoRoute(
