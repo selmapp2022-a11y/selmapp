@@ -883,25 +883,100 @@ class EnhancedAIConversationService:
         pass
 
     async def _generate_grammar_feedback(self, text: str, level: str) -> Dict[str, Any]:
-        """Generate grammar feedback for user text"""
-        # Simplified implementation
-        return {
-            "score": 85,
-            "corrections": [],
-            "suggestions": ["Great grammar usage!"]
-        }
+        """Generate grammar feedback with corrected version using Gemini."""
+        if not text or not text.strip():
+            return {"score": 0, "corrected_text": "", "corrections": [], "suggestions": []}
+        if not self.gemini_model:
+            return {"score": 75, "corrected_text": text, "corrections": [], "suggestions": []}
+
+        prompt = (
+            "You are an English tutor. The learner level is "
+            f"{level}. Review the following sentence written by the learner.\n\n"
+            f"Sentence: \"{text}\"\n\n"
+            "Return ONLY a JSON object with these exact keys:\n"
+            "- score (integer 0-100, grammar quality)\n"
+            "- corrected_text (string: the most natural correct version, "
+            "preserving the learner intended meaning; if already correct return the original)\n"
+            "- corrections (array of objects, each with: original, corrected, explanation; "
+            "explanation must be one short sentence in simple English; max 3 items; "
+            "empty array if no errors)\n"
+            "- suggestions (array of strings: up to 2 short tips to sound more natural; "
+            "empty array if none)\n"
+            "Do not include any text outside the JSON. Do not wrap in markdown."
+        )
+        try:
+            import json, re
+            resp = await self.gemini_model.generate_content_async(prompt)
+            raw = (resp.text or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE).strip()
+            data = json.loads(raw)
+            return {
+                "score": int(data.get("score", 75)),
+                "corrected_text": str(data.get("corrected_text") or text),
+                "corrections": list(data.get("corrections") or [])[:3],
+                "suggestions": list(data.get("suggestions") or [])[:2],
+            }
+        except Exception as e:
+            logger.warning(f"Grammar feedback Gemini failed: {e}")
+            return {"score": 75, "corrected_text": text, "corrections": [], "suggestions": []}
 
     async def _generate_vocabulary_feedback(self, text: str, level: str) -> Dict[str, Any]:
-        """Generate vocabulary feedback"""
-        return {
-            "score": 80,
-            "advanced_words_used": [],
-            "suggestions": ["Try using more varied vocabulary"]
-        }
+        """Generate vocabulary feedback with better word suggestions using Gemini."""
+        if not text or not text.strip():
+            return {"score": 0, "advanced_words_used": [], "suggestions": []}
+        if not self.gemini_model:
+            return {"score": 75, "advanced_words_used": [], "suggestions": []}
+
+        prompt = (
+            "You are an English vocabulary coach. The learner level is "
+            f"{level}. Analyze the following sentence for vocabulary quality.\n\n"
+            f"Sentence: \"{text}\"\n\n"
+            "Return ONLY a JSON object with these exact keys:\n"
+            "- score (integer 0-100, vocabulary richness for the learner level)\n"
+            "- advanced_words_used (array of strings, words above basic level the learner used)\n"
+            "- suggestions (array of objects with: weak_word, better_word, reason; "
+            "max 2 items; empty array if none)\n"
+            "Do not include any text outside the JSON. Do not wrap in markdown."
+        )
+        try:
+            import json, re
+            resp = await self.gemini_model.generate_content_async(prompt)
+            raw = (resp.text or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE).strip()
+            data = json.loads(raw)
+            return {
+                "score": int(data.get("score", 75)),
+                "advanced_words_used": list(data.get("advanced_words_used") or [])[:5],
+                "suggestions": list(data.get("suggestions") or [])[:2],
+            }
+        except Exception as e:
+            logger.warning(f"Vocabulary feedback Gemini failed: {e}")
+            return {"score": 75, "advanced_words_used": [], "suggestions": []}
 
     def _create_feedback_summary(self, components: Dict[str, Any]) -> str:
-        """Create summary from feedback components"""
-        return "Good job! Keep practicing to improve your English skills."
+        """Create a short, helpful summary from feedback components."""
+        parts = []
+        grammar = components.get("grammar") or {}
+        corrections = grammar.get("corrections") or []
+        corrected = grammar.get("corrected_text")
+        if corrections:
+            n = len(corrections)
+            parts.append(f"{n} small grammar fix{'es' if n > 1 else ''} suggested.")
+        elif corrected:
+            parts.append("Grammar looks good.")
+
+        vocab = components.get("vocabulary") or {}
+        vocab_sugg = vocab.get("suggestions") or []
+        if vocab_sugg:
+            parts.append(f"{len(vocab_sugg)} vocabulary tip{'s' if len(vocab_sugg) > 1 else ''} for you.")
+
+        pron = components.get("pronunciation") or {}
+        if isinstance(pron, dict) and pron.get("overall_score") is not None:
+            parts.append(f"Pronunciation: {int(pron.get('overall_score') or 0)}/100.")
+
+        if not parts:
+            return "Nice work - keep practicing!"
+        return " ".join(parts)
 
     def _calculate_overall_score(self, components: Dict[str, Any]) -> int:
         """Calculate overall score from feedback components"""

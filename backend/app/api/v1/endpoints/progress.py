@@ -445,6 +445,25 @@ async def get_today_summary(
     if progress_pct > 100:
         progress_pct = 100.0
 
+    # Count vocabulary words due for review (SRS)
+    from sqlalchemy import select, func, and_
+    from app.models.content import UserVocabulary, VocabularyStatus
+    due_reviews_count = 0
+    try:
+        now = datetime.utcnow()
+        res = await db.execute(
+            select(func.count(UserVocabulary.id)).where(
+                and_(
+                    UserVocabulary.user_id == current_user.id,
+                    UserVocabulary.next_review_date <= now,
+                    UserVocabulary.status.in_([VocabularyStatus.LEARNING, VocabularyStatus.REVIEW]),
+                )
+            )
+        )
+        due_reviews_count = int(res.scalar() or 0)
+    except Exception:
+        due_reviews_count = 0
+
     current_streak = user_progress.current_streak_days if user_progress else 0
     longest_streak = user_progress.longest_streak_days if user_progress else 0
     last_study = (
@@ -473,6 +492,9 @@ async def get_today_summary(
             "progress_percentage": progress_pct,
             "goal_met": today_minutes >= goal_minutes if goal_minutes > 0 else False,
             "remaining_minutes": max(0, goal_minutes - today_minutes),
+        },
+        "vocabulary": {
+            "due_reviews": due_reviews_count,
         },
         "today": {
             "exercises_completed": int(getattr(daily, "exercises_completed", 0) or 0) if daily else 0,
