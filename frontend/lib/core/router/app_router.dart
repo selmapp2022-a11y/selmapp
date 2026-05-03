@@ -229,8 +229,9 @@ class AppRouter {
       GoRoute(
         path: '/welcome',
         name: 'welcome',
-        // Use the new innovative welcome page with story animation
-        builder: (context, state) => const InnovativeWelcomePage(),
+        // Skip the onboarding-style welcome screen and go straight to login,
+        // matching the web experience on selmapp.com.
+        builder: (context, state) => const LoginPage(),
       ),
       // Keep the classic welcome page accessible for fallback
       GoRoute(
