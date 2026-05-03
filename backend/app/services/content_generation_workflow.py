@@ -319,6 +319,7 @@ class ContentGenerationWorkflow:
             - Learning Goals: {', '.join(user_profile.get('learning_goals', []))}
             - Current {target_skill} Performance: {self._get_skill_performance(progress_analytics, target_skill)}
             - Preferred Topics: {', '.join(user_profile.get('preferred_categories', []))}
+            - Personal Interests: {', '.join(user_profile.get('interests', [])) or 'not specified'}
             
             Create a progression where:
             1. Each session builds on the previous one
@@ -678,6 +679,7 @@ class ContentGenerationWorkflow:
         - Weak Areas: {', '.join(progress.get('weak_areas', []))}
         - Strong Areas: {', '.join(progress.get('strong_areas', []))}
         - Preferred Categories: {', '.join(profile.get('preferred_categories', []))}
+        - Personal Interests: {', '.join(profile.get('interests', [])) or 'not specified'}
         - Learning Pace: {profile.get('learning_pace')}
 
         Create a structured journey that fits within their {daily_study_minutes} minutes/day limit:

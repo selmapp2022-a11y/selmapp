@@ -334,7 +334,8 @@ class PersonalTrainerAIService:
             "target_timeline": onboarding.target_timeline if onboarding else "flexible",
             "motivation_factors": onboarding.motivation_factors if onboarding else [],
             "preferred_difficulty": onboarding.preferred_difficulty if onboarding else "gradual",
-            "preferred_content_types": onboarding.preferred_content_types if onboarding else []
+            "preferred_content_types": onboarding.preferred_content_types if onboarding else [],
+            "interests": (onboarding.assessment_details or {}).get("interests", []) if onboarding else []
         }
 
     async def _get_user_progress_analytics(self, db: AsyncSession, user_id: int) -> Dict[str, Any]:

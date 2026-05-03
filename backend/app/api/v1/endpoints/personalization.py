@@ -725,6 +725,53 @@ async def start_onboarding(
             detail=str(e)
         )
 
+@router.get("/interests/", response_model=Dict[str, Any])
+async def get_user_interests(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get the user's personal interests (free-form topics for content personalization)."""
+    onboarding = await user_onboarding.get_by_user_id(db, user_id=current_user.id)
+    if not onboarding:
+        return {"interests": []}
+    details = onboarding.assessment_details or {}
+    return {"interests": details.get("interests", [])}
+
+@router.put("/interests/", response_model=Dict[str, Any])
+async def update_user_interests(
+    *,
+    db: AsyncSession = Depends(get_db),
+    payload: Dict[str, Any],
+    current_user: User = Depends(get_current_user)
+):
+    """Update the user's personal interests. Body: {\"interests\": [...]}."""
+    raw = payload.get("interests", [])
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="interests must be a list of strings")
+    interests = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        s = item.strip()[:50]
+        key = s.lower()
+        if s and key not in seen:
+            seen.add(key)
+            interests.append(s)
+        if len(interests) >= 20:
+            break
+    onboarding = await user_onboarding.get_by_user_id(db, user_id=current_user.id)
+    if not onboarding:
+        started = await personalization_service.start_onboarding(db, user_id=current_user.id)
+        onboarding = started.get("onboarding")
+    details = dict(onboarding.assessment_details or {})
+    details["interests"] = interests
+    onboarding.assessment_details = details
+    flag_modified(onboarding, "assessment_details")
+    await db.commit()
+    await db.refresh(onboarding)
+    return {"interests": interests, "count": len(interests)}
+
 @router.get("/onboarding/categories/", response_model=List[Dict[str, Any]])
 def get_learning_categories():
     """Get all available learning categories with descriptions"""
