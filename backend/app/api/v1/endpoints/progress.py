@@ -502,3 +502,112 @@ async def get_today_summary(
             "accuracy_rate": float(getattr(daily, "accuracy_rate", 0.0) or 0.0) if daily else 0.0,
         },
     }
+
+
+@router.get("/weekly-summary", response_model=dict)
+async def get_weekly_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Last-7-days summary with day-by-day breakdown, goal hit count, best day,
+    week-over-week trend, and current streak. Designed for a weekly chart UI."""
+    today = date.today()
+    week_start = today - timedelta(days=6)            # 7 days incl. today
+    prev_start = today - timedelta(days=13)
+    prev_end = today - timedelta(days=7)
+
+    this_week = await daily_progress_crud.get_user_progress_range(
+        db, user_id=current_user.id, start_date=week_start, end_date=today
+    )
+    prev_week = await daily_progress_crud.get_user_progress_range(
+        db, user_id=current_user.id, start_date=prev_start, end_date=prev_end
+    )
+
+    by_date = {p.date.date().isoformat(): p for p in this_week}
+    goal_minutes = int(getattr(current_user, "daily_goal_minutes", 0) or 0)
+
+    days = []
+    total_minutes = 0
+    total_exercises = 0
+    total_points = 0
+    accuracy_sum = 0.0
+    accuracy_n = 0
+    goal_met_days = 0
+    studied_days = 0
+    best_day = None
+
+    for i in range(7):
+        d = week_start + timedelta(days=i)
+        key = d.isoformat()
+        p = by_date.get(key)
+        minutes = int(getattr(p, "study_time_minutes", 0) or 0) if p else 0
+        exercises = int(getattr(p, "exercises_completed", 0) or 0) if p else 0
+        points = int(getattr(p, "points_earned", 0) or 0) if p else 0
+        accuracy = float(getattr(p, "accuracy_rate", 0.0) or 0.0) if p else 0.0
+        goal_met = minutes >= goal_minutes if goal_minutes > 0 else False
+
+        total_minutes += minutes
+        total_exercises += exercises
+        total_points += points
+        if minutes > 0:
+            studied_days += 1
+            accuracy_sum += accuracy
+            accuracy_n += 1
+        if goal_met:
+            goal_met_days += 1
+        if best_day is None or minutes > best_day["minutes"]:
+            best_day = {"date": key, "weekday": d.strftime("%A"), "minutes": minutes}
+
+        days.append({
+            "date": key,
+            "weekday": d.strftime("%A"),
+            "minutes": minutes,
+            "exercises": exercises,
+            "points": points,
+            "accuracy": round(accuracy, 2),
+            "goal_met": goal_met,
+        })
+
+    avg_minutes = round(total_minutes / 7, 1)
+    avg_accuracy = round(accuracy_sum / accuracy_n, 2) if accuracy_n else 0.0
+
+    prev_total_minutes = sum(int(getattr(p, "study_time_minutes", 0) or 0) for p in prev_week)
+    prev_total_exercises = sum(int(getattr(p, "exercises_completed", 0) or 0) for p in prev_week)
+    minutes_delta_pct = (
+        round((total_minutes - prev_total_minutes) / prev_total_minutes * 100, 1)
+        if prev_total_minutes > 0 else None
+    )
+    exercises_delta_pct = (
+        round((total_exercises - prev_total_exercises) / prev_total_exercises * 100, 1)
+        if prev_total_exercises > 0 else None
+    )
+
+    user_progress = await user_progress_crud.get_by_user(db, user_id=current_user.id)
+
+    return {
+        "range": {"start": week_start.isoformat(), "end": today.isoformat()},
+        "days": days,
+        "totals": {
+            "minutes": total_minutes,
+            "exercises": total_exercises,
+            "points": total_points,
+            "studied_days": studied_days,
+            "goal_met_days": goal_met_days,
+        },
+        "averages": {
+            "minutes_per_day": avg_minutes,
+            "accuracy": avg_accuracy,
+        },
+        "best_day": best_day,
+        "trend_vs_previous_week": {
+            "minutes_change_percent": minutes_delta_pct,
+            "exercises_change_percent": exercises_delta_pct,
+            "previous_total_minutes": prev_total_minutes,
+            "previous_total_exercises": prev_total_exercises,
+        },
+        "streak": {
+            "current": user_progress.current_streak_days if user_progress else 0,
+            "longest": user_progress.longest_streak_days if user_progress else 0,
+        },
+        "daily_goal_minutes": goal_minutes,
+    }
