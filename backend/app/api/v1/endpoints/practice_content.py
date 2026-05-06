@@ -303,6 +303,7 @@ async def heal_audio_cache(
 async def get_micro_lesson(
     skill_type: str,
     topic: Optional[str] = None,
+    level: Optional[str] = None,
     background_tasks: BackgroundTasks = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -323,7 +324,11 @@ async def get_micro_lesson(
     If broken (local file), invalidates cache and regenerates fresh content.
     """
     try:
-        user_level = current_user.current_level.value if current_user.current_level else "B1"
+        valid_levels = {"A1","A2","B1","B2","C1","C2"}
+        if level and level.upper() in valid_levels:
+            user_level = level.upper()
+        else:
+            user_level = current_user.current_level.value if current_user.current_level else "B1"
         _require_practice_access(sync_db, current_user, skill_type=skill_type, level=user_level)
         
         # Select topic if not provided
