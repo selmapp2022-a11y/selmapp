@@ -807,29 +807,42 @@ Please provide a well-structured response in JSON format."""
         self,
         text: str,
         writing_type: str = "general",
-        user_level: str = "B1"
+        user_level: str = "B1",
+        task_prompt: str = ""
     ) -> Dict[str, Any]:
         """
         Assess a writing submission and provide detailed feedback with specific errors.
-        
+
         Args:
             text: The written text to assess
             writing_type: Type of writing (essay, email, letter, story, description, opinion)
             user_level: User's CEFR level (A1-C2)
-            
+            task_prompt: The original task the user was asked to complete. When
+                supplied, Task Achievement is graded against this prompt; otherwise
+                only general writing quality is graded.
+
         Returns:
             Comprehensive assessment with scores, errors, and suggestions
         """
         if not self.gemini_model:
             return {"success": False, "error": "Gemini API not configured"}
 
+        # Inject the original task into the AI prompt so the assessor can judge
+        # whether the user actually addressed it. Without this, scores like
+        # `task_achievement_score` and `feedback` end up generic.
+        task_block = (
+            f'\n        TASK THE STUDENT WAS GIVEN:\n        "{task_prompt.strip()}"\n'
+            if task_prompt and task_prompt.strip()
+            else ""
+        )
+
         prompt = f"""
-        You are an expert English writing teacher. Analyze this {writing_type} written by a {user_level} level student.
-        
+        You are an expert English writing teacher. Analyze this {writing_type} written by a {user_level} level student.{task_block}
         TEXT TO ANALYZE:
         "{text}"
-        
+
         Provide a comprehensive, educational assessment. Be specific about errors and give clear corrections.
+        If a TASK was given above, judge how well the response addresses it (Task Achievement).
         Focus on being helpful - show EXACTLY what was wrong and HOW to fix it.
         
         Return ONLY valid JSON (no markdown):

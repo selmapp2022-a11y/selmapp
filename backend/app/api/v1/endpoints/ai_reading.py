@@ -22,6 +22,10 @@ class GenerateReadingTextRequest(BaseModel):
     vocabulary_count: int = Field(default=10, ge=5, le=20, description="Number of vocabulary words to include")
     include_questions: bool = Field(default=True, description="Generate comprehension questions")
     save_to_database: bool = Field(default=False, description="Save generated content to database")
+    # When supplied, the AI analyses the user's own text (highlighting vocab,
+    # generating comprehension questions) instead of inventing a new passage on
+    # `topic`. Powers the "Paste any English text" flow on the Reading page.
+    original_text: Optional[str] = Field(default=None, description="User-provided text to analyse instead of generating fresh content")
 
 class GenerateReadingTextResponse(BaseModel):
     text_content: str
@@ -54,7 +58,12 @@ async def generate_reading_text(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
-    """Generate reading text using AI with leveled vocabulary from database"""
+    """Generate reading text using AI with leveled vocabulary from database.
+
+    If `original_text` is supplied the AI analyses that text (vocab + questions)
+    instead of inventing a new passage. This powers Reading → "Paste any
+    English text".
+    """
     try:
         # Generate the reading text
         result = await ai_reading_service.generate_reading_text_with_vocabulary(
@@ -64,7 +73,8 @@ async def generate_reading_text(
             topic=request.topic,
             word_count=request.word_count,
             vocabulary_count=request.vocabulary_count,
-            include_comprehension_questions=request.include_questions
+            include_comprehension_questions=request.include_questions,
+            original_text=request.original_text,
         )
         
         reading_text_id = None

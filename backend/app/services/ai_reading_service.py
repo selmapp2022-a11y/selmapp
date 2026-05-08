@@ -24,38 +24,56 @@ class AIReadingService:
             logger.warning("Google Gemini API key not configured")
 
     async def generate_reading_text_with_vocabulary(
-        self, 
+        self,
         db: AsyncSession,
-        level: DifficultyLevel, 
+        level: DifficultyLevel,
         text_type: ReadingTextType,
         topic: str,
         word_count: int = 200,
         vocabulary_count: int = 10,
-        include_comprehension_questions: bool = True
+        include_comprehension_questions: bool = True,
+        original_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Generate reading text using leveled vocabulary from database
-        
-        Args:
-            db: Database session
-            level: CEFR level (A1, A2, B1, B2, C1, C2)
-            text_type: Type of reading text (article, story, news, etc.)
-            topic: Topic for the text (travel, business, daily life, etc.)
-            word_count: Target word count for the text
-            vocabulary_count: Number of vocabulary words to include
-            include_comprehension_questions: Whether to generate questions
-        
-        Returns:
-            Dictionary containing generated text, vocabulary, and questions
+        Generate reading text using leveled vocabulary from database.
+
+        If ``original_text`` is provided, that text is used verbatim (the AI
+        does not invent a new passage), and vocabulary + questions are derived
+        from it. This powers the Reading → "Paste any English text" flow,
+        where the user expects feedback on THEIR text — not a random article.
         """
         if not self.gemini_model:
             raise ValueError("Gemini API not configured")
+
+        # Branch 1: user supplied their own passage. Use it as-is and just
+        # build vocabulary + questions around it.
+        if original_text and original_text.strip():
+            text_content = original_text.strip()
+            vocab_list = await self._extract_vocabulary_from_text(
+                text_content, level, vocabulary_count
+            )
+            result = {
+                "text_content": text_content,
+                "vocabulary_used": vocab_list,
+                "level": level.value,
+                "text_type": text_type.value,
+                "topic": topic,
+                "word_count": len(text_content.split()),
+            }
+            if include_comprehension_questions:
+                questions = await self._generate_comprehension_questions(
+                    text_content, level, vocab_list
+                )
+                result["comprehension_questions"] = questions
+            return result
+
+        # Branch 2: generate fresh content (the original behaviour).
 
         # Get vocabulary words for the specified level
         vocabulary_words = await self._get_leveled_vocabulary(
             db, level, topic, vocabulary_count
         )
-        
+
         if not vocabulary_words:
             # Fallback: use general high-frequency words for the level
             vocabulary_words = await vocabulary_crud.get_by_level(
@@ -96,11 +114,58 @@ class AIReadingService:
 
         return result
 
+    async def _extract_vocabulary_from_text(
+        self,
+        text: str,
+        level: DifficultyLevel,
+        count: int,
+    ) -> List[Dict[str, Any]]:
+        """Pick `count` interesting / level-appropriate words *from the user's text*
+        and return definitions + examples for them. Used when the user pasted
+        their own passage, so vocab matches the actual reading.
+        """
+        if not self.gemini_model:
+            return []
+        prompt = f"""You are an English teacher. From the following passage, pick the {count} most useful vocabulary words for a {level.value} learner. Prefer words that actually appear in the text and would help a learner unlock its meaning.
+
+PASSAGE:
+\"\"\"
+{text}
+\"\"\"
+
+Return ONLY a valid JSON array (no markdown):
+[
+  {{"word": "...", "definition": "short learner-friendly definition", "part_of_speech": "noun|verb|adj|adv", "example": "an example sentence using the word"}}
+]
+"""
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, self.gemini_model.generate_content, prompt)
+            raw = (response.text or "").strip()
+            # strip ```json fences
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+                raw = raw.rsplit("```", 1)[0]
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return [
+                    {
+                        "word": str(d.get("word", "")).strip(),
+                        "definition": str(d.get("definition", "")).strip(),
+                        "part_of_speech": str(d.get("part_of_speech", "")).strip(),
+                        "example": str(d.get("example", "")).strip(),
+                    }
+                    for d in data if isinstance(d, dict) and d.get("word")
+                ]
+        except Exception as e:
+            logger.warning(f"_extract_vocabulary_from_text failed: {e}")
+        return []
+
     async def _get_leveled_vocabulary(
-        self, 
-        db: AsyncSession, 
-        level: DifficultyLevel, 
-        topic: str, 
+        self,
+        db: AsyncSession,
+        level: DifficultyLevel,
+        topic: str,
         count: int
     ) -> List[Vocabulary]:
         """Get vocabulary words for specific level and topic"""

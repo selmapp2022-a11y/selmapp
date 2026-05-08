@@ -524,27 +524,27 @@ async def assess_writing_direct(
     text: str = Body(..., embed=True, min_length=10),
     writing_type: str = Body(default="general"),
     user_level: str = Body(default=None),
+    prompt: str = Body(default=""),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
     """
     Directly assess a piece of writing and return detailed feedback.
-    
-    This endpoint provides comprehensive AI-powered writing assessment including:
-    - Overall and component scores (grammar, vocabulary, coherence, task achievement)
-    - Specific errors with corrections and explanations
-    - Vocabulary suggestions for improvement
-    - Actionable next steps and practice recommendations
+
+    `prompt` is the original task the user was given (e.g. "Write a cover
+    letter for a software engineer position"). When supplied, the AI grades
+    Task Achievement against the prompt instead of giving generic feedback.
     """
     try:
         # Use user's level if not provided
         level = user_level or (current_user.current_level.value if current_user.current_level else "B1")
-        
+
         # Get AI assessment
         ai_result = await ai_service.assess_writing(
             text=text,
             writing_type=writing_type,
-            user_level=level
+            user_level=level,
+            task_prompt=prompt,
         )
         
         if ai_result.get('success'):
