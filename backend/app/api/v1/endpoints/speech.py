@@ -132,12 +132,12 @@ async def evaluate_speech(
         duration_ms = 0
         stt_available = False
         try:
-            # 3-stage STT fallback chain. ELSA first because (a) it works for
-            # this account and (b) for IELTS we'll re-use its rich scoring
-            # response below. Then ElevenLabs Scribe, then Google Cloud STT.
-            from app.services.elsa_unscripted_service import ELSAUnscriptedService
+            # STT primarily via SpeechAce Premium (same key as Pronunciation
+            # tab, also gives IELTS bands which we re-use below for IELTS
+            # mode). ElevenLabs Scribe + Google STT are fallbacks.
+            from app.services.speechace_premium_service import SpeechAcePremiumService
             from app.services.elevenlabs_asr_service import ElevenLabsASRService
-            stt: Any = ELSAUnscriptedService()
+            stt: Any = SpeechAcePremiumService()
             stt_result = await stt.transcribe(audio_bytes, language_code=language)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
                 stt = ElevenLabsASRService()
@@ -228,30 +228,26 @@ async def evaluate_speech(
             "scoringType": "text",  # Indicate this is text scoring (comparing against reference)
         }
 
-        # IELTS-style enhancement. When the client requests mode="ielts" we
-        # call ELSA Unscripted directly — it returns IELTS/TOEFL/PTE estimates,
-        # CEFR per skill, grammar+vocab+pronunciation feedback in one go.
-        # This replaces the previous "transcript → Gemini examiner" detour
-        # which was approximate and slow.
+        # IELTS-style enhancement. SpeechAce Premium open-ended returns IELTS
+        # bands, CEFR, PTE/TOEFL estimates and per-skill scores in a single
+        # call — no need for a separate vendor. We send the user's prompt as
+        # `relevance_context` so SpeechAce can grade Task Response too.
         if mode == "ielts":
             try:
-                from app.services.elsa_unscripted_service import ELSAUnscriptedService
-                elsa_full = await ELSAUnscriptedService().score(audio_bytes, api_plan="premium")
-                if elsa_full.get("success"):
-                    extra_tips = elsa_full.get("tips") or []
+                from app.services.speechace_premium_service import SpeechAcePremiumService
+                sa_full = await SpeechAcePremiumService().score_open_ended_normalised(
+                    audio_bytes,
+                    relevance_context=prompt or None,
+                )
+                if sa_full.get("success"):
+                    extra_tips = sa_full.get("tips") or []
                     resp["tips"] = list(resp.get("tips") or []) + extra_tips
-                    resp["ielts"] = elsa_full.get("ielts")
-                    # ELSA's overall (eps_score) is more accurate for IELTS-mode.
-                    overall_score = elsa_full.get("overallScore")
+                    resp["ielts"] = sa_full.get("ielts")
+                    overall_score = sa_full.get("overallScore")
                     if overall_score is not None:
                         resp["overallScore"] = overall_score
-                    # Use ELSA's transcript/scores when SpeechAce had nothing.
-                    if elsa_full.get("transcript"):
-                        resp["transcript"]["text"] = resp["transcript"].get("text") or elsa_full["transcript"]
-                    if elsa_full.get("vocabulary_suggestions"):
-                        resp["vocabularySuggestions"] = elsa_full["vocabulary_suggestions"]
-                    if elsa_full.get("grammar_items"):
-                        resp["grammarItems"] = elsa_full["grammar_items"]
+                    if sa_full.get("transcript"):
+                        resp["transcript"]["text"] = resp["transcript"].get("text") or sa_full["transcript"]
             except Exception as e:
                 resp.setdefault("tips", []).append(
                     f"(IELTS expanded feedback unavailable: {type(e).__name__})"

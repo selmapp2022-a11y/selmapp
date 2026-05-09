@@ -539,7 +539,65 @@ async def assess_writing_direct(
         # Use user's level if not provided
         level = user_level or (current_user.current_level.value if current_user.current_level else "B1")
 
-        # Get AI assessment
+        # Try SpeechAce Score Writing first — it's the same Premium account
+        # we use for pronunciation, but the writing endpoint returns
+        # IELTS/CEFR-aligned grammar+vocab+coherence+task scores. Fall back
+        # to Gemini if SpeechAce is unreachable or returns no usable data.
+        try:
+            from app.services.speechace_premium_service import SpeechAcePremiumService
+            sa_resp = await SpeechAcePremiumService().score_writing(
+                text=text,
+                question_prompt=prompt or None,
+                user_id=str(current_user.id),
+            )
+        except Exception:
+            sa_resp = {"success": False}
+
+        if sa_resp.get("success"):
+            sa_data = sa_resp.get("data") or {}
+            ts = sa_data.get("text_score") or {}
+            sa_score = ts.get("speechace_score") or {}
+            ielts = ts.get("ielts_score") or {}
+
+            def _f(d, k):
+                v = d.get(k) if isinstance(d, dict) else None
+                try:
+                    return float(v) if v is not None else None
+                except Exception:
+                    return None
+
+            # Map SpeechAce 0-100 scale into the same fields the UI expects.
+            return {
+                "success": True,
+                "assessment": {
+                    "scores": {
+                        "overall": int(_f(sa_score, "overall") or 0),
+                        "grammar": int(_f(sa_score, "grammar") or 0),
+                        "vocabulary": int(_f(sa_score, "vocab") or 0),
+                        "coherence": int(_f(sa_score, "coherence") or 0),
+                        "task_achievement": int(_f(sa_score, "relevance") or 0),
+                    },
+                    "ielts_band": _f(ielts, "overall"),
+                    "feedback": ts.get("feedback_text") or "Detailed scores from SpeechAce. Review the highlights below.",
+                    "strengths": ts.get("strengths") or [],
+                    "weaknesses": ts.get("weaknesses") or [],
+                    "errors": ts.get("errors") or [],
+                    "vocabulary_suggestions": ts.get("vocabulary_suggestions") or [],
+                    "suggestions": ts.get("suggestions") or [],
+                    "next_steps": [],
+                    "corrected_version": ts.get("corrected_text"),
+                    "recommended_exercises": [],
+                },
+                "metadata": {
+                    "word_count": len(text.split()),
+                    "character_count": len(text),
+                    "writing_type": writing_type,
+                    "user_level": level,
+                    "scorer": "speechace_premium",
+                },
+            }
+
+        # Fallback: Gemini-based assessment (the previous default).
         ai_result = await ai_service.assess_writing(
             text=text,
             writing_type=writing_type,

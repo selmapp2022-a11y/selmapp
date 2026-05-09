@@ -75,17 +75,15 @@ class GeminiFlashConversationService:
             }
 
         try:
-            # Step 1+2: STT with a 3-stage fallback chain so a single failing
-            # provider can never silently break Live Conversation:
-            #   1. ELSA Unscripted (also gives transcript + IELTS/CEFR scores)
-            #   2. ElevenLabs Scribe (existing key, no GCP gymnastics)
-            #   3. Google Cloud STT (last resort — needs the GCP project to
-            #      have the Speech API enabled, which currently it doesn't)
-            from app.services.elsa_unscripted_service import ELSAUnscriptedService
+            # STT via SpeechAce Premium (the same key powers the Pronunciation
+            # tab, so no extra vendor needed). Falls back to ElevenLabs Scribe
+            # then Google STT if SpeechAce is unreachable. ELSA was removed —
+            # SpeechAce Premium covers everything ELSA offered for IELTS/TOEFL.
+            from app.services.speechace_premium_service import SpeechAcePremiumService
             from app.services.elevenlabs_asr_service import ElevenLabsASRService
             from app.services.asr_service import GoogleSTTService
 
-            stt_result = await ELSAUnscriptedService().transcribe(audio_data)
+            stt_result = await SpeechAcePremiumService().transcribe(audio_data)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
                 stt_result = await ElevenLabsASRService().transcribe(audio_data)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
