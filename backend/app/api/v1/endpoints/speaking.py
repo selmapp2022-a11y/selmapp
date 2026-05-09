@@ -436,9 +436,10 @@ async def process_audio_conversation(
     import logging as _logging
     log = _logging.getLogger(__name__)
     try:
-        # Get user level for personalization
-        progress = await speaking_progress.get_by_user(db, current_user.id)
-        user_level = progress.current_level.value if progress else "B1"
+        # Get user level for personalization. The CRUDSpeakingProgress.get_by_user
+        # is sync and expects user_id as a keyword arg; avoid that whole CRUD path
+        # — the level we need is already on the user record we have in hand.
+        user_level = current_user.current_level.value if current_user.current_level else "B1"
 
         # Read audio data
         audio_data = await audio_file.read()
