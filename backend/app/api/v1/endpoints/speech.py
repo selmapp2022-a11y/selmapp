@@ -3,7 +3,7 @@ import io
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import Any, Optional
 
 from app.api.deps import get_db, get_current_user
 from app.schemas.speech import SpeechEvaluateResponse
@@ -132,13 +132,20 @@ async def evaluate_speech(
         duration_ms = 0
         stt_available = False
         try:
-            stt = GoogleSTTService()
+            # ElevenLabs Scribe first (Google Cloud STT was returning
+            # PERMISSION_DENIED in this project). Fall back to GoogleSTTService
+            # only if Scribe isn't configured. (Switched 2026-05-08.)
+            from app.services.elevenlabs_asr_service import ElevenLabsASRService
+            stt: Any = ElevenLabsASRService()
             stt_result = await stt.transcribe(audio_bytes, language_code=language)
+            if not stt_result.get("success"):
+                # Fallback to Google
+                stt = GoogleSTTService()
+                stt_result = await stt.transcribe(audio_bytes, language_code=language)
             if stt_result.get("success"):
                 stt_available = True
                 transcript_text = stt_result.get("text", "") or ""
                 words = stt_result.get("words", []) or []
-                # estimate duration from words if possible
                 if words:
                     starts = [w.get("startMs") for w in words if w.get("startMs") is not None]
                     ends = [w.get("endMs") for w in words if w.get("endMs") is not None]

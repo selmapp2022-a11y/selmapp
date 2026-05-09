@@ -75,13 +75,13 @@ class GeminiFlashConversationService:
             }
 
         try:
-            # Step 1+2: Transcribe directly with Google Cloud STT v2 (same path
-            # /speech/evaluate uses, which works reliably for Pronunciation).
-            # The previous pydub→ffmpeg→FREE-google-web-speech pipeline was
-            # flaky in production and consistently returned empty transcripts.
-            # (Switched 2026-05-08.)
-            from app.services.asr_service import GoogleSTTService
-            stt = GoogleSTTService()
+            # Step 1+2: Transcribe via ElevenLabs Scribe. Google Cloud STT was
+            # returning PERMISSION_DENIED in production (the project tied to
+            # the API key doesn't have Speech-to-Text enabled and we can't
+            # enable it from outside that project). ElevenLabs Scribe uses the
+            # same key we already have wired up for TTS. (Switched 2026-05-08.)
+            from app.services.elevenlabs_asr_service import ElevenLabsASRService
+            stt = ElevenLabsASRService()
             stt_result = await stt.transcribe(audio_data, language_code="en-US")
 
             if not stt_result.get("success"):
