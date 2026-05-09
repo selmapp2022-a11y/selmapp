@@ -257,21 +257,21 @@ LEVEL GUIDANCE: {level_guidance.get(user_level, "Adapt to learner's level")}
 
 USER'S CURRENT MESSAGE: "{user_input}"
 
+CRITICAL: The user just said the message above. You MUST directly engage with what they said — quote or paraphrase a specific detail from their message in your reply. Do not give a generic greeting or off-topic answer; if you cannot understand their message, ask them politely to clarify what they said.
+
 Your task is to:
-1. Respond naturally to continue the conversation
-2. Gently correct any major errors in the user's message
-3. Teach 1-2 relevant language points naturally
-4. Ask a follow-up question to continue the conversation
-5. Keep responses appropriate in length for speaking practice
+1. Acknowledge the SPECIFIC content the user said (reference at least one concrete detail from their message)
+2. Continue the conversation naturally on the same thread
+3. Gently correct any major grammar or vocabulary errors in the user's message
+4. Teach 1-2 relevant language points naturally
+5. Ask a follow-up question that builds on what THEY just said
+6. Keep responses appropriate in length for speaking practice (2-4 sentences for the main response)
 
-Format your response as:
-RESPONSE: [Your natural conversational response]
-
-RESPONSE_TYPE: [question/statement/clarification/confirmation]
-
-FOLLOW_UP_QUESTION: [A question to continue the conversation]
-
-TEACHING_POINTS: [1-2 language points you taught naturally, separated by semicolons]
+Format your response EXACTLY as below (each label on its own line):
+RESPONSE: <your natural conversational response that quotes/paraphrases the user>
+RESPONSE_TYPE: <question|statement|clarification|confirmation>
+FOLLOW_UP_QUESTION: <a question that builds on what the user said>
+TEACHING_POINTS: <1-2 language points you taught naturally, separated by semicolons>
 
 Make your response engaging, encouraging, and educational!"""
 

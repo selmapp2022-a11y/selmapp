@@ -13,6 +13,72 @@ from app.services.speaking_eval_service import SpeakingEvaluationService
 router = APIRouter()
 
 
+async def _generate_ielts_feedback(transcript: str, task_prompt: str, pronunciation_score: float) -> Optional[dict]:
+    """Run a Gemini IELTS-style assessment over the user's transcript.
+
+    Returns a dict with `tips` (list[str]), `bands` (dict of the four IELTS
+    sub-skills with band 0-9), and `overall_score` (0-100), or ``None`` if
+    Gemini is unavailable. Errors propagate to the caller.
+    """
+    import json as _json
+    import google.generativeai as genai
+    from app.core.config import settings as _settings
+    if not getattr(_settings, "GOOGLE_GEMINI_API_KEY", None):
+        return None
+    genai.configure(api_key=_settings.GOOGLE_GEMINI_API_KEY)
+    model = genai.GenerativeModel(
+        getattr(_settings, "GEMINI_TEXT_MODEL_REASON", _settings.GEMINI_MODEL)
+    )
+    task_block = f'\n        TASK GIVEN:\n        "{task_prompt.strip()}"' if task_prompt and task_prompt.strip() else ""
+    prompt_text = f"""You are an IELTS Speaking examiner. The candidate just gave the following spoken response (auto-transcribed){task_block}
+
+CANDIDATE TRANSCRIPT:
+\"\"\"
+{transcript}
+\"\"\"
+
+Score the response on the four official IELTS Speaking criteria using the 0-9 band scale.
+Be specific — quote the candidate's exact words when pointing out errors or strengths.
+
+Return ONLY valid JSON (no markdown, no commentary):
+{{
+  "fluency_coherence": {{"band": 6.0, "comment": "..."}},
+  "lexical_resource": {{"band": 5.5, "comment": "..."}},
+  "grammar_accuracy": {{"band": 6.0, "comment": "..."}},
+  "task_response": {{"band": 6.5, "comment": "How well they addressed the task"}},
+  "overall_band": 6.0,
+  "tips": [
+    "Specific actionable tip quoting an exact phrase the candidate used",
+    "Another concrete tip"
+  ]
+}}
+"""
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, model.generate_content, prompt_text)
+    raw = (response.text or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+        raw = raw.rsplit("```", 1)[0]
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return None
+    bands = {
+        "fluencyCoherence": data.get("fluency_coherence"),
+        "lexicalResource": data.get("lexical_resource"),
+        "grammarAccuracy": data.get("grammar_accuracy"),
+        "taskResponse": data.get("task_response"),
+    }
+    overall_band = data.get("overall_band")
+    overall_score = round(float(overall_band) * 10) if overall_band else None
+    return {
+        "tips": data.get("tips") or [],
+        "bands": bands,
+        "overall_score": overall_score,
+    }
+
+
 def estimate_audio_duration_ms(audio_bytes: bytes) -> int:
     """Estimate audio duration from WAV file headers or file size."""
     try:
@@ -47,6 +113,8 @@ async def evaluate_speech(
     reference_text: str = Form(...),
     language: str = Form("en-US"),
     audio: UploadFile = File(...),
+    mode: str = Form("read"),  # "read" (default, pronunciation-focused) or "ielts" (free-form, full IELTS-style feedback)
+    prompt: str = Form(""),  # When mode=ielts, the topic the user was asked to talk about
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
@@ -149,6 +217,29 @@ async def evaluate_speech(
             "phonemeScores": result.get("phoneme_scores") or {},
             "scoringType": "text",  # Indicate this is text scoring (comparing against reference)
         }
+
+        # IELTS-style enhancement. When the client requests mode="ielts",
+        # SpeechAce alone only returns pronunciation/fluency. IELTS scoring
+        # additionally needs Lexical Resource, Grammatical Range & Accuracy,
+        # and Task Response. Run the transcript through Gemini for those
+        # bands and merge richer tips/scores into the response.
+        if mode == "ielts" and transcript_text:
+            try:
+                ielts_extras = await _generate_ielts_feedback(
+                    transcript=transcript_text,
+                    task_prompt=prompt,
+                    pronunciation_score=resp["pronunciationScore"],
+                )
+                if ielts_extras:
+                    extra_tips = ielts_extras.get("tips") or []
+                    resp["tips"] = list(resp.get("tips") or []) + extra_tips
+                    resp["ielts"] = ielts_extras.get("bands")
+                    if ielts_extras.get("overall_score"):
+                        resp["overallScore"] = ielts_extras["overall_score"]
+            except Exception as e:
+                resp.setdefault("tips", []).append(
+                    f"(IELTS expanded feedback unavailable: {type(e).__name__})"
+                )
 
         return resp
 
