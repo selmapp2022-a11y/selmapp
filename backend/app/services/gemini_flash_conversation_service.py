@@ -75,34 +75,37 @@ class GeminiFlashConversationService:
             }
 
         try:
-            # Step 1: Process audio for speech recognition
-            audio_processing_result = await self.audio_processor.process_audio_for_speech_recognition(
-                audio_data=audio_data,
-                user_id=user_id
-            )
+            # Step 1+2: Transcribe directly with Google Cloud STT v2 (same path
+            # /speech/evaluate uses, which works reliably for Pronunciation).
+            # The previous pydub→ffmpeg→FREE-google-web-speech pipeline was
+            # flaky in production and consistently returned empty transcripts.
+            # (Switched 2026-05-08.)
+            from app.services.asr_service import GoogleSTTService
+            stt = GoogleSTTService()
+            stt_result = await stt.transcribe(audio_data, language_code="en-US")
 
-            if not audio_processing_result["success"]:
-                return {
-                    "success": False,
-                    "error": f"Audio processing failed: {audio_processing_result.get('error', 'Unknown error')}",
-                    "fallback": True
-                }
-
-            # Step 2: Get speech-to-text transcription
-            stt_result = await self.audio_processor.speech_to_text(
-                audio_data=audio_processing_result["processed_audio"],
-                user_id=user_id
-            )
-
-            if not stt_result["success"]:
+            if not stt_result.get("success"):
                 return {
                     "success": False,
                     "error": f"Speech recognition failed: {stt_result.get('error', 'Unknown error')}",
-                    "fallback": True
+                    "fallback": True,
                 }
 
-            user_transcription = stt_result["transcript"]
-            recognition_confidence = stt_result["confidence"]
+            user_transcription = (stt_result.get("text") or "").strip()
+            recognition_confidence = stt_result.get("confidence", 0.0)
+            audio_processing_result: Dict[str, Any] = {
+                "quality_analysis": {},
+                "features": {},
+            }
+
+            if not user_transcription:
+                return {
+                    "success": False,
+                    "error": "We couldn't make out what you said — please speak a bit louder or longer.",
+                    "transcription": "",
+                    "confidence": 0.0,
+                    "fallback": True,
+                }
 
             # Step 3: Generate conversational AI response
             ai_response_result = await self._generate_conversational_response(
