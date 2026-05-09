@@ -1276,4 +1276,55 @@ def _get_level_encouragement(level: UserLevel) -> str:
         UserLevel.C1: "Outstanding! You have advanced English proficiency.",
         UserLevel.C2: "Exceptional! You have near-native English mastery."
     }
-    return encouragements.get(level, "Keep practicing - you're making great progress!") 
+    return encouragements.get(level, "Keep practicing - you're making great progress!")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Client-side state sync (XP, streak, achievements, recent events)
+# ─────────────────────────────────────────────────────────────────────────────
+# The web client used to keep progress only in localStorage, so clearing
+# the browser cache wiped streaks and XP, and the user got different progress
+# on each device. These endpoints persist a small JSON blob per user in
+# Redis so the same state appears on phone, desktop, and after a cache clear.
+
+_CLIENT_STATE_KEY = "client_state:user:{user_id}"
+_CLIENT_STATE_TTL_SECONDS = 60 * 60 * 24 * 365 * 2  # 2 years (effectively persistent on managed Redis)
+
+
+@router.get("/me/client-state")
+async def get_client_state(
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return the cross-device client state for the signed-in user."""
+    from app.core.cache import get_redis
+    redis = await get_redis()
+    raw = await redis.get(_CLIENT_STATE_KEY.format(user_id=current_user.id))
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+@router.put("/me/client-state")
+async def put_client_state(
+    payload: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Replace the user's cross-device client state with the supplied JSON."""
+    from app.core.cache import get_redis
+    redis = await get_redis()
+    # Cap the payload size so a misbehaving client can't fill Redis.
+    encoded = json.dumps(payload)
+    if len(encoded) > 256 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="client-state payload exceeds 256KB",
+        )
+    await redis.set(
+        _CLIENT_STATE_KEY.format(user_id=current_user.id),
+        encoded,
+        ex=_CLIENT_STATE_TTL_SECONDS,
+    )
+    return {"success": True}
