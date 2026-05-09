@@ -108,7 +108,7 @@ def estimate_audio_duration_ms(audio_bytes: bytes) -> int:
         return max(1000, len(audio_bytes) // 32)
 
 
-@router.post("/evaluate", response_model=SpeechEvaluateResponse)
+@router.post("/evaluate")
 async def evaluate_speech(
     reference_text: str = Form(...),
     language: str = Form("en-US"),
