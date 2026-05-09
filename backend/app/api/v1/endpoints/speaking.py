@@ -327,37 +327,18 @@ async def assess_speech(
                     )
                 audio_bytes = await response.read()
 
-        # Transcribe audio using STT. STT is optional: when it is not
-        # available (no Google STT key or 404), we still want SpeechAce to
-        # score the audio against the provided reference text. Only error
-        # out if STT fails AND the caller did not provide a reference text.
-        transcript_text = ""
-        words: list = []
-        try:
-            stt_service = GoogleSTTService()
-            stt_result = await stt_service.transcribe(audio_bytes, language_code="en-US")
-            if stt_result.get("success"):
-                transcript_text = stt_result.get("text", "") or ""
-                words = stt_result.get("words", []) or []
-            else:
-                logger.warning(
-                    f"STT unavailable, continuing with reference-only scoring: "
-                    f"{stt_result.get('error')}"
-                )
-                if not (assessment_request.prompt_text or "").strip():
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Transcription service unavailable and no reference text provided",
-                    )
-        except HTTPException:
-            raise
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"STT call raised, continuing without transcript: {e}")
-            if not (assessment_request.prompt_text or "").strip():
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Transcription service unavailable and no reference text provided",
-                )
+        # Transcribe audio using STT
+        stt_service = GoogleSTTService()
+        stt_result = await stt_service.transcribe(audio_bytes, language_code="en-US")
+
+        if not stt_result.get("success"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Speech transcription failed: {stt_result.get('error')}"
+            )
+
+        transcript_text = stt_result.get("text", "")
+        words = stt_result.get("words", [])
 
         # Estimate duration from words
         duration_ms = 0
@@ -367,61 +348,29 @@ async def assess_speech(
             if starts and ends:
                 duration_ms = max(ends) - min(starts)
 
-        # Try SpeechAce directly first when configured — it returns a clean
-        # snake_case payload that maps 1:1 to SpeechAssessmentResponse. Fall
-        # back to the integrated evaluation service (Gemini path) only if
-        # SpeechAce is missing or fails.
-        speechace = SpeechaceService()
-        result: Dict[str, Any] = {}
-        if speechace.api_key:
-            sa = await speechace.assess_pronunciation(
-                audio_bytes=audio_bytes,
-                reference_text=assessment_request.prompt_text or "",
-                user_id=str(current_user.id),
-            )
-            if sa.get("success") and sa.get("assessment"):
-                result = sa["assessment"]
-                logger.info(
-                    f"SpeechAce ok: overall={result.get('overall_score')}"
-                    f" pron={result.get('pronunciation_score')}"
-                )
-            else:
-                logger.warning(f"SpeechAce failed: {sa.get('error')}")
+        # Assess speech using integrated evaluation service
+        evaluator = SpeakingEvaluationService()
+        result = await evaluator.evaluate(
+            reference_text=assessment_request.prompt_text or "",
+            transcript_text=transcript_text,
+            transcript_words=words,
+            duration_ms=duration_ms,
+            audio_bytes=audio_bytes,
+            user_id=str(current_user.id)
+        )
 
-        if not result:
-            # Last-resort fallback (Gemini path returns camelCase keys)
-            evaluator = SpeakingEvaluationService()
-            raw = await evaluator.evaluate(
-                reference_text=assessment_request.prompt_text or "",
-                transcript_text=transcript_text,
-                transcript_words=words,
-                duration_ms=duration_ms,
-                audio_bytes=audio_bytes,
-                user_id=str(current_user.id),
-            )
-            # Normalize camelCase → snake_case so the response is consistent
-            result = {
-                "overall_score": raw.get("overall_score") or raw.get("overallScore") or 0.0,
-                "pronunciation_score": raw.get("pronunciation_score"),
-                "fluency_score": raw.get("fluency_score"),
-                "accuracy_score": raw.get("accuracy_score"),
-                "transcribed_text": (raw.get("transcript") or {}).get("text", transcript_text),
-                "feedback": "Evaluated via Gemini fallback",
-                "suggestions": raw.get("tips") or [],
-                "confidence": 0.0,
-            }
-
+        # Convert to response format
         return SpeechAssessmentResponse(
-            overall_score=float(result.get("overall_score") or 0.0),
+            overall_score=result.get("overall_score", 0.0),
             pronunciation_score=result.get("pronunciation_score"),
             fluency_score=result.get("fluency_score"),
             accuracy_score=result.get("accuracy_score"),
-            transcribed_text=result.get("transcribed_text") or transcript_text,
-            phoneme_scores=result.get("phoneme_scores") or {},
-            word_scores=result.get("word_scores") or {},
-            feedback=result.get("feedback") or "Assessment completed",
-            suggestions=result.get("suggestions") or [],
-            confidence=float(result.get("confidence") or 0.0),
+            transcribed_text=result.get("transcribed_text", transcript_text),
+            phoneme_scores=result.get("phoneme_scores", {}),
+            word_scores=result.get("word_scores", {}),
+            feedback=result.get("feedback", "Assessment completed"),
+            suggestions=result.get("suggestions", []),
+            confidence=result.get("confidence", 0.0)
         )
 
     except HTTPException:
@@ -470,37 +419,59 @@ async def real_time_assessment(
 
 # ==================== AUDIO CONVERSATION ENDPOINTS (Gemini Flash-Lite) ====================
 
-@router.post("/audio-conversation", response_model=AudioConversationResponse)
+@router.post("/audio-conversation")
 async def process_audio_conversation(
     conversation_context: str = Query(..., description="Context for the conversation (e.g., 'daily life', 'business meeting')"),
     audio_file: UploadFile = File(...),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
-    """Process user audio and generate conversational AI response using Gemini Flash-Lite"""
+    """Process user audio and generate conversational AI response.
 
-    # Get user level for personalization
-    progress = await speaking_progress.get_by_user(db, current_user.id)
-    user_level = progress.current_level.value if progress else "B1"
+    Returns a permissive shape (raw dict) so missing optional fields from the
+    underlying service don't trigger pydantic 500s. Errors are surfaced in the
+    response body rather than as a 500 — the UI can then show the user a
+    helpful message instead of a generic failure.
+    """
+    import logging as _logging
+    log = _logging.getLogger(__name__)
+    try:
+        # Get user level for personalization
+        progress = await speaking_progress.get_by_user(db, current_user.id)
+        user_level = progress.current_level.value if progress else "B1"
 
-    # Read audio data
-    audio_data = await audio_file.read()
+        # Read audio data
+        audio_data = await audio_file.read()
 
-    # Process conversation
-    result = await gemini_conversation_service.process_audio_conversation(
-        audio_data=audio_data,
-        conversation_context=conversation_context,
-        user_level=user_level,
-        user_id=current_user.id
-    )
-
-    if not result["success"]:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=result.get("error", "Audio conversation processing failed")
+        # Process conversation
+        result = await gemini_conversation_service.process_audio_conversation(
+            audio_data=audio_data,
+            conversation_context=conversation_context,
+            user_level=user_level,
+            user_id=current_user.id
         )
+    except Exception as e:
+        log.exception("audio-conversation pre-call failed")
+        return {
+            "success": False,
+            "transcription": "",
+            "ai_response": "",
+            "error": f"{type(e).__name__}: {e}",
+            "conversation_context": conversation_context,
+        }
 
-    return AudioConversationResponse(**result)
+    # Service returned but indicated failure — pass it back as a body error.
+    if not result.get("success"):
+        log.warning("audio-conversation service returned success=False: %s", result.get("error"))
+        return {
+            "success": False,
+            "transcription": result.get("transcription", ""),
+            "ai_response": "Sorry, I couldn't process that. Please try again.",
+            "error": result.get("error") or "Audio conversation processing failed",
+            "conversation_context": conversation_context,
+        }
+
+    return result
 
 @router.post("/exercise/{prompt_id}/audio-response", response_model=AudioConversationResponse)
 async def process_exercise_audio_response(

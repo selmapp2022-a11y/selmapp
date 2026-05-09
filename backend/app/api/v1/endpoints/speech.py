@@ -246,7 +246,29 @@ async def evaluate_speech(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        # Don't 500 the client — return a minimal scaffold response with the
+        # error in tips so the UI can render *something* and we still see what
+        # broke. Speaking is a critical path; an outage here would silently
+        # block all of Speaking and IELTS.
+        import logging as _logging
+        _logging.getLogger(__name__).exception("speech/evaluate failed")
+        return {
+            "overallScore": 0,
+            "pronunciationScore": 0,
+            "fluencyScore": 0,
+            "accuracy": {"wer": 1.0, "correct": 0, "insertions": 0, "deletions": 0, "substitutions": 0},
+            "pronunciation": {"issues": [], "score": 0},
+            "fluency": {"wpm": 0, "avgPauseMs": None, "longPauses": []},
+            "timing": {"durationMs": 0},
+            "transcript": {"text": "", "words": [], "isReference": True, "referenceText": reference_text},
+            "tips": [
+                f"We couldn't score this attempt ({type(e).__name__}). Please try again.",
+            ],
+            "wordScores": {},
+            "detailedWordFeedback": [],
+            "phonemeScores": {},
+            "scoringType": "error",
+        }
 
 
 
