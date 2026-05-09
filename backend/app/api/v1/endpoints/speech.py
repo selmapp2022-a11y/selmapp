@@ -132,15 +132,16 @@ async def evaluate_speech(
         duration_ms = 0
         stt_available = False
         try:
-            # STT primarily via SpeechAce Premium (same key as Pronunciation
-            # tab, also gives IELTS bands which we re-use below for IELTS
-            # mode). ElevenLabs Scribe + Google STT are fallbacks.
-            from app.services.speechace_premium_service import SpeechAcePremiumService
+            # STT chain — ElevenLabs Scribe first (confirmed working for
+            # this account), SpeechAce Premium open-ended second (only
+            # available on Premium plans), Google STT last (currently
+            # disabled in this GCP project but kept for future).
             from app.services.elevenlabs_asr_service import ElevenLabsASRService
-            stt: Any = SpeechAcePremiumService()
+            from app.services.speechace_premium_service import SpeechAcePremiumService
+            stt: Any = ElevenLabsASRService()
             stt_result = await stt.transcribe(audio_bytes, language_code=language)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
-                stt = ElevenLabsASRService()
+                stt = SpeechAcePremiumService()
                 stt_result = await stt.transcribe(audio_bytes, language_code=language)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
                 stt = GoogleSTTService()

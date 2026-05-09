@@ -191,13 +191,13 @@ class ElevenLabsTTSService:
         """Retrieve previously generated audio by filename."""
         return await audio_storage_service.get_audio(filename)
 
-    # ── Listening content (multi-speaker) ────────────────────────────
+    # ── Listening content (multi-speaker, Eleven v3 dialogue) ─────────
     #
-    # Produces a multi-speaker dialogue clip by calling the TTS endpoint once
-    # PER SPEAKER TURN with that speaker's voice and concatenating the MP3
-    # chunks. Previously the whole script was sent in a single TTS request,
-    # which read every line in the same voice — so Sarah and Tom sounded
-    # identical. (Added 2026-05-08.)
+    # Uses ElevenLabs ``POST /v1/text-to-dialogue`` (Eleven v3). One request,
+    # one MP3, native multi-speaker dialogue with proper prosody, turn-taking
+    # and emotional delivery. Replaces the older "TTS-per-turn-and-concat"
+    # approach, which produced choppy seams and a robotic feel.
+    # (Switched 2026-05-08.)
     async def generate_listening_content(
         self,
         topic: str,
@@ -255,39 +255,49 @@ class ElevenLabsTTSService:
         if not self.api_key:
             return {"success": False, "error": "ELEVENLABS_API_KEY not configured"}
 
-        # Synthesise each turn and accumulate raw MP3 bytes. ElevenLabs MP3
-        # frames concatenate cleanly, so a simple bytes-join produces a
-        # playable single-file dialogue track.
-        audio_chunks: List[bytes] = []
-        url_template = TTS_API_URL
-        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-            for turn in turns:
-                voice_id = voice_map.get(turn["speaker"], DEFAULT_VOICE_ID)
-                payload = {
-                    "text": turn["text"],
-                    "model_id": DEFAULT_MODEL_ID,
-                    "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75,
-                        "style": 0.0,
-                        "use_speaker_boost": True,
-                    },
-                }
-                headers = {
-                    "xi-api-key": self.api_key,
-                    "Accept": "audio/mpeg",
-                    "Content-Type": "application/json",
-                }
-                resp = await client.post(url_template.format(voice_id=voice_id), headers=headers, json=payload)
-                if resp.status_code != 200:
-                    logger.error(
-                        "ElevenLabs TTS turn failed for speaker=%s status=%s",
-                        turn["speaker"], resp.status_code,
-                    )
-                    return {"success": False, "error": f"ElevenLabs TTS error {resp.status_code}"}
-                audio_chunks.append(resp.content)
+        # One request to Eleven v3 Text-to-Dialogue → one MP3 with native
+        # multi-speaker delivery, proper turn-taking, and matched prosody.
+        # The total `inputs[].text` size has to stay under 2000 characters,
+        # which fits a typical 5–8-turn 60s listening dialogue easily.
+        dialogue_inputs: List[Dict[str, str]] = []
+        for turn in turns:
+            voice_id = voice_map.get(turn["speaker"], DEFAULT_VOICE_ID)
+            dialogue_inputs.append({"text": turn["text"], "voice_id": voice_id})
 
-        audio_bytes = b"".join(audio_chunks)
+        payload = {
+            "inputs": dialogue_inputs,
+            "model_id": "eleven_v3",
+            "settings": {"stability": 0.5},
+        }
+        headers = {
+            "xi-api-key": self.api_key,
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+                resp = await client.post(
+                    "https://api.elevenlabs.io/v1/text-to-dialogue",
+                    headers=headers,
+                    json=payload,
+                )
+            if resp.status_code != 200:
+                logger.error(
+                    "ElevenLabs dialogue v3 failed: status=%s body=%s",
+                    resp.status_code, resp.text[:300],
+                )
+                # Graceful fallback to legacy per-turn synthesis so a v3
+                # outage doesn't break Listening for the day.
+                audio_bytes = await self._render_dialogue_via_legacy(turns, voice_map)
+                if not audio_bytes:
+                    return {"success": False, "error": f"ElevenLabs dialogue error {resp.status_code}"}
+            else:
+                audio_bytes = resp.content
+        except Exception as e:
+            logger.exception("ElevenLabs dialogue v3 unexpected error")
+            audio_bytes = await self._render_dialogue_via_legacy(turns, voice_map)
+            if not audio_bytes:
+                return {"success": False, "error": str(e)}
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:8]
         filename = f"listening_{timestamp}_{unique_id}.mp3"
@@ -331,6 +341,45 @@ class ElevenLabsTTSService:
                 "multi_voice": True,
             },
         }
+
+    async def _render_dialogue_via_legacy(
+        self,
+        turns: List[Dict[str, str]],
+        voice_map: Dict[str, str],
+    ) -> bytes:
+        """Fallback path — call /v1/text-to-speech once per turn and
+        concatenate. Used when Eleven v3 dialogue is unavailable so we still
+        ship Listening with multiple voices, just without the natural
+        cross-turn prosody."""
+        if not self.api_key:
+            return b""
+        chunks: List[bytes] = []
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            for turn in turns:
+                voice_id = voice_map.get(turn["speaker"], DEFAULT_VOICE_ID)
+                payload = {
+                    "text": turn["text"],
+                    "model_id": DEFAULT_MODEL_ID,
+                    "voice_settings": {
+                        "stability": 0.5,
+                        "similarity_boost": 0.75,
+                        "style": 0.0,
+                        "use_speaker_boost": True,
+                    },
+                }
+                headers = {
+                    "xi-api-key": self.api_key,
+                    "Accept": "audio/mpeg",
+                    "Content-Type": "application/json",
+                }
+                try:
+                    resp = await client.post(TTS_API_URL.format(voice_id=voice_id), headers=headers, json=payload)
+                except Exception:
+                    return b""
+                if resp.status_code != 200:
+                    return b""
+                chunks.append(resp.content)
+        return b"".join(chunks)
 
     def _build_speaker_voice_map(
         self,

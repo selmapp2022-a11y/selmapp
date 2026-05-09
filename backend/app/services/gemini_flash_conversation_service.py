@@ -75,17 +75,19 @@ class GeminiFlashConversationService:
             }
 
         try:
-            # STT via SpeechAce Premium (the same key powers the Pronunciation
-            # tab, so no extra vendor needed). Falls back to ElevenLabs Scribe
-            # then Google STT if SpeechAce is unreachable. ELSA was removed —
-            # SpeechAce Premium covers everything ELSA offered for IELTS/TOEFL.
-            from app.services.speechace_premium_service import SpeechAcePremiumService
+            # STT chain — ElevenLabs Scribe first because it's confirmed
+            # working for this account; SpeechAce Premium second (the
+            # /speech/v9/json open-ended endpoint requires the Premium plan
+            # tier and may not be enabled for every Speechace key); Google
+            # STT last and only useful if the GCP project has Speech-to-Text
+            # enabled (currently it doesn't — kept for future).
             from app.services.elevenlabs_asr_service import ElevenLabsASRService
+            from app.services.speechace_premium_service import SpeechAcePremiumService
             from app.services.asr_service import GoogleSTTService
 
-            stt_result = await SpeechAcePremiumService().transcribe(audio_data)
+            stt_result = await ElevenLabsASRService().transcribe(audio_data)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
-                stt_result = await ElevenLabsASRService().transcribe(audio_data)
+                stt_result = await SpeechAcePremiumService().transcribe(audio_data)
             if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
                 stt_result = await GoogleSTTService().transcribe(audio_data, language_code="en-US")
 
