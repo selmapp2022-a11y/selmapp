@@ -1,107 +1,67 @@
 """
 ElevenLabs Text-to-Speech service.
 
-Mirrors the public interface of GeminiTTSService.generate_audio_content
-so it can be used as a drop-in replacement.
+Drop-in replacement for ``GeminiTTSService`` — exposes the same
+``generate_audio_content`` interface so existing endpoints work
+without any callsite changes. Selected via ``TTS_PROVIDER=elevenlabs``.
 
-Configuration (app.core.config.settings):
-    TTS_PROVIDER                       - "elevenlabs" or "gemini" (default: gemini)
-    ELEVENLABS_API_KEY                 - API key (required when provider is elevenlabs)
-    ELEVENLABS_MODEL_ID                - default "eleven_turbo_v2_5"
-    ELEVENLABS_VOICE_ID_AMERICAN       - default voice for American English
-    ELEVENLABS_VOICE_ID_BRITISH        - default voice for British English
-    ELEVENLABS_DEFAULT_ACCENT          - "american" or "british" (default: american)
+Uses HTTP directly (httpx) to avoid pulling in the elevenlabs SDK.
 """
+from __future__ import annotations
 
 import asyncio
-import io
-import wave
 import base64
+import hashlib
 import logging
 import uuid
-import hashlib
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
 
+from app.core.cache import get_redis
 from app.core.config import settings
 from app.services.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 
-ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
+# ElevenLabs default voices. Voice IDs come from https://api.elevenlabs.io/v1/voices
+# These are stable, name-stable Eleven Labs voice IDs.
+DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel — clear neutral female narration
+NAME_TO_VOICE_ID: Dict[str, str] = {
+    "Rachel": "21m00Tcm4TlvDq8ikWAM",
+    "Adam": "pNInz6obpgDQGcFmaJgB",
+    "Bella": "EXAVITQu4vr4xnSDxMaL",
+    "Antoni": "ErXwobaYiN019PkySvjV",
+    "Josh": "TxGEqnHWrfWFTfGW9XjX",
+    "Sam": "yoZ06aMxZJJ28mfd3POQ",
+    "Elli": "MF3mGyEYCl7XYWbV9V6O",
+    # Friendly aliases also accepted via case-insensitive lookup.
+}
 
-# Sensible defaults for high-quality natural voices.
-# These can be overridden via env vars.
-DEFAULT_VOICE_AMERICAN = "EXAVITQu4vr4xnSDxMaL"  # Sarah – warm American female
-DEFAULT_VOICE_BRITISH = "XB0fDUnXU5powFXDhCwa"   # Charlotte – natural British female
-DEFAULT_MODEL = "eleven_turbo_v2_5"
+DEFAULT_MODEL_ID = "eleven_turbo_v2_5"   # fast multi-lingual model
+TTS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+TIMEOUT_SECONDS = 30.0
 
 
 class ElevenLabsTTSService:
-    """Async ElevenLabs TTS client returning the same response shape as GeminiTTSService."""
+    """Text-to-Speech via ElevenLabs HTTP API."""
 
     def __init__(self) -> None:
         self.api_key: Optional[str] = getattr(settings, "ELEVENLABS_API_KEY", None)
-        self.model_id: str = getattr(settings, "ELEVENLABS_MODEL_ID", DEFAULT_MODEL) or DEFAULT_MODEL
-        self.voice_american: str = (
-            getattr(settings, "ELEVENLABS_VOICE_ID_AMERICAN", DEFAULT_VOICE_AMERICAN) or DEFAULT_VOICE_AMERICAN
-        )
-        self.voice_british: str = (
-            getattr(settings, "ELEVENLABS_VOICE_ID_BRITISH", DEFAULT_VOICE_BRITISH) or DEFAULT_VOICE_BRITISH
-        )
-        self.default_accent: str = (
-            getattr(settings, "ELEVENLABS_DEFAULT_ACCENT", "american") or "american"
-        ).lower()
         if not self.api_key:
             logger.warning(
-                "ELEVENLABS_API_KEY not configured. ElevenLabs TTS will return error responses."
+                "ELEVENLABS_API_KEY not set; ElevenLabsTTSService will fail "
+                "until the key is configured."
             )
+        self.redis = None
 
-    # ------------------------------------------------------------------ helpers
+    async def _get_redis(self):
+        if not self.redis:
+            self.redis = await get_redis()
+        return self.redis
 
-    def _resolve_voice(
-        self,
-        speaker_config: Optional[List[Dict[str, Any]]],
-        voice_settings: Optional[Dict[str, Any]],
-    ) -> str:
-        """Pick a voice id from explicit override, accent hint, or default."""
-        # Explicit voice id wins.
-        if speaker_config and isinstance(speaker_config, list) and speaker_config:
-            spk = speaker_config[0] or {}
-            explicit = spk.get("voice_id") or spk.get("elevenlabs_voice_id")
-            if explicit:
-                return str(explicit)
-            accent = (spk.get("accent") or "").lower()
-            if accent in ("british", "uk", "en-gb", "british english"):
-                return self.voice_british
-            if accent in ("american", "us", "en-us", "american english"):
-                return self.voice_american
-
-        if voice_settings:
-            explicit = voice_settings.get("voice_id")
-            if explicit:
-                return str(explicit)
-            accent = (voice_settings.get("accent") or "").lower()
-            if accent in ("british", "uk", "en-gb"):
-                return self.voice_british
-            if accent in ("american", "us", "en-us"):
-                return self.voice_american
-
-        return self.voice_british if self.default_accent == "british" else self.voice_american
-
-    @staticmethod
-    def _wrap_pcm_as_wav(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # 16-bit PCM
-            wf.setframerate(sample_rate)
-            wf.writeframes(pcm_bytes)
-        return buf.getvalue()
-
-    # ----------------------------------------------------------------- public
+    # ---- Public API matching GeminiTTSService ----
 
     async def generate_audio_content(
         self,
@@ -110,397 +70,375 @@ class ElevenLabsTTSService:
         speaker_config: Optional[List[Dict[str, Any]]] = None,
         voice_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Generate audio with ElevenLabs and persist via AudioStorageService.
+        """Generate audio for ``text`` and persist via audio_storage_service.
 
-        Returns the same dict shape as GeminiTTSService.generate_audio_content.
+        Returns the same shape as GeminiTTSService.generate_audio_content so
+        callers (users.py / ai.py / listening.py) need no changes.
         """
         if not self.api_key:
             return {
                 "success": False,
-                "error": "ElevenLabs API key not configured",
+                "error": "ELEVENLABS_API_KEY not configured",
                 "fallback_available": True,
             }
 
-        if not text or not text.strip():
-            return {"success": False, "error": "Empty text provided to TTS", "fallback_available": False}
+        # Voice selection — accept either a voice_id directly or a friendly name.
+        voice_id = self._resolve_voice_id(speaker_config)
+        model_id = (voice_settings or {}).get("model_id") or DEFAULT_MODEL_ID
 
-        voice_id = self._resolve_voice(speaker_config, voice_settings)
+        # Sensible defaults; overridable per request.
+        merged_voice_settings = {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+        }
+        if voice_settings:
+            for k in ("stability", "similarity_boost", "style", "use_speaker_boost"):
+                if k in voice_settings:
+                    merged_voice_settings[k] = voice_settings[k]
 
-        # Stable, unique filename (matches existing naming scheme used by the player & cache).
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:8]
         text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
-        filename = f"elevenlabs_tts_{timestamp}_{unique_id}_{text_hash}.wav"
+        filename = f"elevenlabs_tts_{timestamp}_{unique_id}_{text_hash}.mp3"
 
-        # Voice tuning: allow caller overrides, otherwise pleasant defaults.
-        # `speed` defaults to 0.9 to make listening exercises slightly slower
-        # and easier to follow for English learners.
-        vs = voice_settings or {}
-        body = {
-            "text": text,
-            "model_id": vs.get("model_id") or self.model_id,
-            "voice_settings": {
-                "stability": float(vs.get("stability", 0.45)),
-                "similarity_boost": float(vs.get("similarity_boost", 0.75)),
-                "style": float(vs.get("style", 0.0)),
-                "use_speaker_boost": bool(vs.get("use_speaker_boost", True)),
-                "speed": float(vs.get("speed", 0.9)),
-            },
-        }
-
-        # Request 24 kHz 16-bit PCM so we can wrap in WAV (matches Gemini path)
-        url = (
-            f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}"
-            f"?output_format=pcm_24000"
-        )
+        url = TTS_API_URL.format(voice_id=voice_id)
         headers = {
             "xi-api-key": self.api_key,
-            "accept": "audio/wav",
-            "content-type": "application/json",
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+        }
+        payload: Dict[str, Any] = {
+            "text": text,
+            "model_id": model_id,
+            "voice_settings": merged_voice_settings,
         }
 
         try:
-            # Retry up to 3 times with exponential backoff for transient failures.
-            last_error: Optional[str] = None
-            pcm_bytes: Optional[bytes] = None
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                for attempt in range(3):
-                    try:
-                        resp = await client.post(url, headers=headers, json=body)
-                        if resp.status_code == 200:
-                            pcm_bytes = resp.content
-                            break
-                        # Surface the API error message for diagnostics.
-                        last_error = (
-                            f"ElevenLabs HTTP {resp.status_code}: "
-                            f"{resp.text[:200] if resp.text else 'no body'}"
-                        )
-                        # Don't retry on 4xx (auth, quota, bad voice id).
-                        if 400 <= resp.status_code < 500:
-                            break
-                    except httpx.TimeoutException as e:
-                        last_error = f"ElevenLabs timeout: {e}"
-                    except httpx.HTTPError as e:
-                        last_error = f"ElevenLabs HTTP error: {e}"
-                    if attempt < 2:
-                        await asyncio.sleep(1 * (attempt + 1))
-
-            if pcm_bytes is None:
-                logger.error(f"ElevenLabs TTS failed after retries: {last_error}")
-                return {
-                    "success": False,
-                    "error": last_error or "ElevenLabs TTS failed",
-                    "fallback_available": True,
-                }
-
-            wav_bytes = self._wrap_pcm_as_wav(pcm_bytes, sample_rate=24000)
-            audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
-
-            storage_result = await audio_storage_service.store_audio(
-                audio_data=audio_b64,
-                filename=filename,
-                metadata={
-                    "text": text,
-                    "audio_type": audio_type,
-                    "speaker_config": speaker_config,
-                    "voice_settings": vs,
-                    "generated_at": datetime.utcnow().isoformat(),
-                    "tts_engine": body["model_id"],
-                    "voice": voice_id,
-                    "api": "elevenlabs",
-                },
-            )
-
-            voice_label = (
-                "Sarah" if voice_id == self.voice_american
-                else "Charlotte" if voice_id == self.voice_british
-                else voice_id
-            )
-            accent_label = (
-                "american" if voice_id == self.voice_american
-                else "british" if voice_id == self.voice_british
-                else None
-            )
-            return {
-                "success": True,
-                "audio_url": storage_result["audio_url"],
-                "filename": storage_result.get("filename", filename),
-                "audio_data": audio_b64,
-                "duration_seconds": storage_result.get(
-                    "duration_seconds", max(1.0, len(text.split()) * 0.4)
-                ),
-                "file_size": storage_result.get("file_size", len(wav_bytes)),
-                "speaker_count": 1,
-                "tts_model": body["model_id"],
-                "voice": voice_label,
-                "voice_id": voice_id,
-                "accent": accent_label,
-                "provider": "elevenlabs",
-                "metadata": {
-                    "text_length": len(text),
-                    "audio_type": audio_type,
-                    "generated_at": datetime.utcnow().isoformat(),
-                    "model": body["model_id"],
-                    "voice_used": voice_id,
-                    "voice_name": voice_label,
-                    "accent": accent_label,
-                    "api": "elevenlabs",
-                },
-            }
-
-        except Exception as e:  # noqa: BLE001 — convert to structured failure
-            logger.error(f"ElevenLabs TTS generation failed: {e}", exc_info=True)
-            return {"success": False, "error": str(e), "fallback_available": True}
-
-    # ---------------------------------------------------------- multi-speaker
-
-    # Rich pool of ElevenLabs premade voices, all North American English.
-    # Used to give listening exercises maximum voice variety: each new
-    # conversation gets a deterministically-rotated pair so users hear
-    # many different characters across the app.
-    _FEMALE_VOICES: List[Dict[str, str]] = [
-        {"id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah",    "accent": "american"},
-        {"id": "XrExE9yKIg1WjnnlVkGX", "name": "Matilda",  "accent": "american"},
-        {"id": "cgSgspJ2msm6clMCkdW9", "name": "Jessica",  "accent": "american"},
-        {"id": "jsCqWAovK2LkecY7zXl4", "name": "Freya",    "accent": "american"},
-        {"id": "pFZP5JQG7iQjIQuC4Bku", "name": "Lily",     "accent": "american"},
-        {"id": "21m00Tcm4TlvDq8ikWAM", "name": "Rachel",   "accent": "american"},
-    ]
-    _MALE_VOICES: List[Dict[str, str]] = [
-        {"id": "nPczCjzI2devNBz1zQrb", "name": "Brian",    "accent": "american"},
-        {"id": "pqHfZKP75CvOlQylNhV4", "name": "Bill",     "accent": "american"},
-        {"id": "TX3LPaxmHKxFdv7VOQHJ", "name": "Liam",     "accent": "american"},
-        {"id": "pNInz6obpgDQGcFmaJgB", "name": "Adam",     "accent": "american"},
-        {"id": "cjVigY5qzO86Huf0OWal", "name": "Eric",     "accent": "american"},
-        {"id": "CwhRBWXzGAHq8TQ4Fs17", "name": "Roger",    "accent": "american"},
-    ]
-
-    # Backwards-compat: lookup of voice_id -> friendly name (used in metadata).
-    _MULTI_SPEAKER_VOICE_LABELS: Dict[str, str] = {
-        v["id"]: v["name"] for v in (_FEMALE_VOICES + _MALE_VOICES)
-    }
-
-    # Backwards-compat: keep accent-keyed dict so callers that reference it
-    # still work. We point both "american" and "british" at the American pool
-    # because product decision is to use American/Canadian English only.
-    _MULTI_SPEAKER_VOICES: Dict[str, Dict[str, str]] = {
-        "american": {"female": _FEMALE_VOICES[0]["id"], "male": _MALE_VOICES[0]["id"]},
-        "british":  {"female": _FEMALE_VOICES[0]["id"], "male": _MALE_VOICES[0]["id"]},
-    }
-
-    def _assign_voices_for_speakers(
-        self,
-        speaker_names: List[str],
-        accent: str,
-    ) -> Dict[str, str]:
-        """Deterministic map of speaker_name -> voice_id, alternating female/male.
-
-        Rotates through the full female/male pools using a hash of the
-        speaker_names tuple so different conversations get different voices,
-        while the same conversation always renders identically (cache-friendly).
-        """
-        # Stable seed from the conversation's speakers (order-sensitive).
-        seed_str = "|".join(speaker_names)
-        seed = int(hashlib.md5(seed_str.encode("utf-8")).hexdigest()[:8], 16)
-        female_start = seed % len(self._FEMALE_VOICES)
-        male_start = (seed >> 4) % len(self._MALE_VOICES)
-
-        order = ["female", "male"]
-        mapping: Dict[str, str] = {}
-        seen: List[str] = []
-        for name in speaker_names:
-            if name not in mapping:
-                gender = order[len(seen) % len(order)]
-                if gender == "female":
-                    voice = self._FEMALE_VOICES[
-                        (female_start + sum(1 for g in seen if g == "female"))
-                        % len(self._FEMALE_VOICES)
-                    ]["id"]
-                else:
-                    voice = self._MALE_VOICES[
-                        (male_start + sum(1 for g in seen if g == "male"))
-                        % len(self._MALE_VOICES)
-                    ]["id"]
-                mapping[name] = voice
-                seen.append(gender)
-        return mapping
-
-    async def _synthesize_pcm(
-        self,
-        text: str,
-        voice_id: str,
-        voice_settings: Optional[Dict[str, Any]] = None,
-    ) -> Optional[bytes]:
-        """Single ElevenLabs TTS call returning raw 24 kHz PCM bytes (no WAV header)."""
-        if not self.api_key or not text or not text.strip():
-            return None
-        vs = voice_settings or {}
-        body = {
-            "text": text,
-            "model_id": vs.get("model_id") or self.model_id,
-            "voice_settings": {
-                "stability": float(vs.get("stability", 0.45)),
-                "similarity_boost": float(vs.get("similarity_boost", 0.75)),
-                "style": float(vs.get("style", 0.0)),
-                "use_speaker_boost": bool(vs.get("use_speaker_boost", True)),
-                "speed": float(vs.get("speed", 0.9)),
-            },
-        }
-        url = (
-            f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}"
-            f"?output_format=pcm_24000"
-        )
-        headers = {
-            "xi-api-key": self.api_key,
-            "accept": "audio/wav",
-            "content-type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=30.0) as client:
             for attempt in range(3):
                 try:
-                    resp = await client.post(url, headers=headers, json=body)
+                    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+                        resp = await client.post(url, headers=headers, json=payload)
                     if resp.status_code == 200:
-                        return resp.content
-                    if 400 <= resp.status_code < 500:
-                        logger.error(
-                            f"ElevenLabs HTTP {resp.status_code} on multi-speaker turn: "
-                            f"{resp.text[:200] if resp.text else 'no body'}"
+                        audio_bytes = resp.content
+                        break
+                    # Retry on 429 (rate limit) and 5xx
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "ElevenLabs TTS attempt %s returned %s; retrying in %ss",
+                            attempt + 1, resp.status_code, wait,
                         )
-                        return None
-                except httpx.HTTPError as e:
-                    logger.warning(f"ElevenLabs turn attempt {attempt+1} failed: {e}")
-                if attempt < 2:
+                        await asyncio.sleep(wait)
+                        continue
+                    # Hard failure
+                    logger.error(
+                        "ElevenLabs TTS failed: status=%s body=%s",
+                        resp.status_code, resp.text[:200],
+                    )
+                    return {
+                        "success": False,
+                        "error": f"ElevenLabs API error {resp.status_code}",
+                        "fallback_available": True,
+                    }
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    if attempt == 2:
+                        raise
+                    logger.warning(
+                        "ElevenLabs TTS network error (attempt %s/3): %s",
+                        attempt + 1, e,
+                    )
                     await asyncio.sleep(1 * (attempt + 1))
-        return None
-
-    async def generate_multi_speaker_audio(
-        self,
-        turns: List[Dict[str, str]],
-        audio_type: str = "conversation",
-        accent: str = "american",
-        voice_settings: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Generate a single audio file with distinct voices per speaker.
-
-        Args:
-            turns: List of {"speaker": str, "text": str} in script order.
-            audio_type: For metadata (conversation/interview/etc).
-            accent: "american" or "british" – picks the female/male voice pair.
-            voice_settings: Optional ElevenLabs voice settings overrides.
-
-        Returns the same dict shape as generate_audio_content with extra
-        "voice_assignments" mapping speaker_name -> voice_label.
-        """
-        if not self.api_key:
-            return {"success": False, "error": "ElevenLabs API key not configured", "fallback_available": True}
-        if not turns:
-            return {"success": False, "error": "No turns provided", "fallback_available": False}
-
-        accent_norm = (accent or "american").lower()
-        if accent_norm not in self._MULTI_SPEAKER_VOICES:
-            accent_norm = "american"
-
-        speaker_order = [t.get("speaker", "Speaker") for t in turns]
-        voice_map = self._assign_voices_for_speakers(speaker_order, accent_norm)
-
-        # Synthesize each turn in order. ~300ms silence between turns at 24 kHz / 16-bit mono.
-        silence_between = b"\x00" * (24000 * 2 * 300 // 1000)
-        pcm_chunks: List[bytes] = []
-        for idx, turn in enumerate(turns):
-            speaker = turn.get("speaker", "Speaker")
-            text = (turn.get("text") or "").strip()
-            if not text:
-                continue
-            voice_id = voice_map.get(speaker) or self._MULTI_SPEAKER_VOICES[accent_norm]["female"]
-            pcm = await self._synthesize_pcm(text, voice_id, voice_settings)
-            if pcm is None:
+            else:  # pragma: no cover — loop exhausted without break
                 return {
                     "success": False,
-                    "error": f"ElevenLabs TTS failed on turn {idx+1} (speaker {speaker})",
+                    "error": "ElevenLabs TTS exhausted retries",
                     "fallback_available": True,
                 }
-            pcm_chunks.append(pcm)
-            if idx < len(turns) - 1:
-                pcm_chunks.append(silence_between)
+        except Exception as e:  # pragma: no cover
+            logger.exception("ElevenLabs TTS unexpected error")
+            return {
+                "success": False,
+                "error": str(e),
+                "fallback_available": True,
+            }
 
-        if not pcm_chunks:
-            return {"success": False, "error": "All turns were empty", "fallback_available": False}
-
-        merged_pcm = b"".join(pcm_chunks)
-        wav_bytes = self._wrap_pcm_as_wav(merged_pcm, sample_rate=24000)
-        audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
-
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        unique_id = uuid.uuid4().hex[:8]
-        full_text = "\n".join(t.get("text", "") for t in turns)
-        text_hash = hashlib.md5(full_text.encode("utf-8")).hexdigest()[:8]
-        filename = f"elevenlabs_dialog_{timestamp}_{unique_id}_{text_hash}.wav"
-
-        storage_result = await audio_storage_service.store_audio(
-            audio_data=audio_b64,
-            filename=filename,
-            metadata={
-                "audio_type": audio_type,
-                "accent": accent_norm,
-                "speakers": speaker_order,
-                "voice_assignments": {
-                    name: self._MULTI_SPEAKER_VOICE_LABELS.get(vid, vid)
-                    for name, vid in voice_map.items()
-                },
-                "generated_at": datetime.utcnow().isoformat(),
-                "tts_engine": self.model_id,
-                "api": "elevenlabs",
-                "multi_speaker": True,
-            },
-        )
-
-        voice_assignments = {
-            name: self._MULTI_SPEAKER_VOICE_LABELS.get(vid, vid)
-            for name, vid in voice_map.items()
-        }
-        primary_voice = next(iter(voice_assignments.values()), None)
+        # Persist + return matching GeminiTTSService shape.
+        try:
+            stored = await audio_storage_service.store_audio(
+                filename=filename,
+                audio_bytes=audio_bytes,
+                content_type="audio/mpeg",
+            )
+        except Exception as e:
+            logger.exception("Failed to persist ElevenLabs audio")
+            return {"success": False, "error": f"Storage error: {e}"}
 
         return {
             "success": True,
-            "audio_url": storage_result["audio_url"],
-            "filename": storage_result.get("filename", filename),
-            "audio_data": audio_b64,
-            "duration_seconds": storage_result.get(
-                "duration_seconds", max(1.0, sum(len((t.get("text") or "").split()) for t in turns) * 0.4)
-            ),
-            "file_size": storage_result.get("file_size", len(wav_bytes)),
-            "speaker_count": len({s for s in speaker_order}),
-            "tts_model": self.model_id,
-            "voice": primary_voice,
-            "voice_id": next(iter(voice_map.values()), None),
-            "accent": accent_norm,
-            "provider": "elevenlabs",
-            "multi_speaker": True,
-            "voice_assignments": voice_assignments,
+            "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
+            "filename": filename,
+            "audio_format": "mp3",
+            "tts_engine": "elevenlabs",
+            "tts_model": model_id,
+            "voice_id": voice_id,
+            "duration_seconds": None,  # ElevenLabs doesn't return duration; clients infer
+            "audio_data_base64": base64.b64encode(audio_bytes).decode("ascii"),
+        }
+
+    async def get_cached_audio(self, filename: str) -> Optional[Dict[str, Any]]:
+        """Retrieve previously generated audio by filename."""
+        return await audio_storage_service.get_audio(filename)
+
+    # ── Listening content (multi-speaker) ────────────────────────────
+    #
+    # Produces a multi-speaker dialogue clip by calling the TTS endpoint once
+    # PER SPEAKER TURN with that speaker's voice and concatenating the MP3
+    # chunks. Previously the whole script was sent in a single TTS request,
+    # which read every line in the same voice — so Sarah and Tom sounded
+    # identical. (Added 2026-05-08.)
+    async def generate_listening_content(
+        self,
+        topic: str,
+        difficulty_level: str,
+        content_type: str = "conversation",
+        speaker_names: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        # Lazy import: re-use Gemini for script generation but produce audio here.
+        from app.services.gemini_tts_service import GeminiTTSService
+        gemini = GeminiTTSService()
+        script_result = await gemini._generate_script(
+            topic=topic,
+            difficulty_level=difficulty_level,
+            content_type=content_type,
+            speaker_names=speaker_names,
+        )
+        if not script_result.get("success"):
+            return script_result
+
+        script: str = script_result["script"] or ""
+        speakers_meta: List[Dict[str, Any]] = script_result.get("speakers", []) or []
+
+        # Map each unique speaker name to a stable, gender-appropriate voice.
+        voice_map = self._build_speaker_voice_map(speakers_meta, script)
+
+        # Parse the script into (speaker, text) turns. Lines like
+        # "Speaker Name: text" mark a turn; lines without a colon are
+        # appended to the previous turn so paragraph wrapping doesn't
+        # split a sentence into a separate single-word call.
+        turns: List[Dict[str, str]] = []
+        current_speaker: Optional[str] = None
+        for raw in script.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            # Heuristic: "<Name>: text" with the name being short and capitalised.
+            if ":" in line:
+                head, _, tail = line.partition(":")
+                if 1 <= len(head) <= 40 and not head.endswith("."):
+                    current_speaker = head.strip()
+                    text = tail.strip()
+                    if text:
+                        turns.append({"speaker": current_speaker, "text": text})
+                    continue
+            # Continuation line — attach to last turn if present.
+            if turns:
+                turns[-1]["text"] = (turns[-1]["text"] + " " + line).strip()
+            else:
+                # No structured speaker yet — treat as narrator with default voice.
+                turns.append({"speaker": current_speaker or "Narrator", "text": line})
+
+        if not turns:
+            return {"success": False, "error": "Generated script had no speakable turns"}
+
+        if not self.api_key:
+            return {"success": False, "error": "ELEVENLABS_API_KEY not configured"}
+
+        # Synthesise each turn and accumulate raw MP3 bytes. ElevenLabs MP3
+        # frames concatenate cleanly, so a simple bytes-join produces a
+        # playable single-file dialogue track.
+        audio_chunks: List[bytes] = []
+        url_template = TTS_API_URL
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            for turn in turns:
+                voice_id = voice_map.get(turn["speaker"], DEFAULT_VOICE_ID)
+                payload = {
+                    "text": turn["text"],
+                    "model_id": DEFAULT_MODEL_ID,
+                    "voice_settings": {
+                        "stability": 0.5,
+                        "similarity_boost": 0.75,
+                        "style": 0.0,
+                        "use_speaker_boost": True,
+                    },
+                }
+                headers = {
+                    "xi-api-key": self.api_key,
+                    "Accept": "audio/mpeg",
+                    "Content-Type": "application/json",
+                }
+                resp = await client.post(url_template.format(voice_id=voice_id), headers=headers, json=payload)
+                if resp.status_code != 200:
+                    logger.error(
+                        "ElevenLabs TTS turn failed for speaker=%s status=%s",
+                        turn["speaker"], resp.status_code,
+                    )
+                    return {"success": False, "error": f"ElevenLabs TTS error {resp.status_code}"}
+                audio_chunks.append(resp.content)
+
+        audio_bytes = b"".join(audio_chunks)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        unique_id = uuid.uuid4().hex[:8]
+        filename = f"listening_{timestamp}_{unique_id}.mp3"
+        try:
+            stored = await audio_storage_service.store_audio(
+                filename=filename,
+                audio_bytes=audio_bytes,
+                content_type="audio/mpeg",
+            )
+        except Exception as e:
+            logger.exception("Failed to persist multi-voice listening audio")
+            return {"success": False, "error": f"Storage error: {e}"}
+
+        # Update the speakers list so the UI can show which voice each speaker uses.
+        speakers_with_voice: List[Dict[str, Any]] = []
+        for s in speakers_meta:
+            name = s.get("name") or s.get("speaker") or ""
+            speakers_with_voice.append({
+                **s,
+                "name": name,
+                "voice_id": voice_map.get(name, DEFAULT_VOICE_ID),
+            })
+
+        return {
+            "success": True,
+            "topic": topic,
+            "difficulty_level": difficulty_level,
+            "content_type": content_type,
+            "script": script,
+            "speakers": speakers_with_voice,
+            "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
+            "audio_data": base64.b64encode(audio_bytes).decode("ascii"),
+            "duration_seconds": script_result.get("duration_seconds", 60),
+            "comprehension_questions": script_result.get("comprehension_questions", []),
+            "vocabulary_focus": script_result.get("vocabulary_focus", []),
             "metadata": {
-                "audio_type": audio_type,
+                "tts_model": DEFAULT_MODEL_ID,
                 "generated_at": datetime.utcnow().isoformat(),
-                "model": self.model_id,
-                "accent": accent_norm,
-                "voice_assignments": voice_assignments,
+                "speaker_count": len(speakers_with_voice),
                 "api": "elevenlabs",
-                "multi_speaker": True,
+                "multi_voice": True,
             },
         }
 
+    def _build_speaker_voice_map(
+        self,
+        speakers_meta: List[Dict[str, Any]],
+        script: str,
+    ) -> Dict[str, str]:
+        """Assign a distinct ElevenLabs voice_id to each speaker name.
 
-# Singleton accessor (same pattern as gemini_tts_service.get_tts_service)
-_elevenlabs_tts_instance: Optional[ElevenLabsTTSService] = None
-_elevenlabs_tts_lock: Optional[asyncio.Lock] = None
+        Tries to match gender from speaker metadata first; falls back to a
+        round-robin over female/male voice pools so two speakers always sound
+        different even when gender is unknown.
+        """
+        female_voices = [
+            "21m00Tcm4TlvDq8ikWAM",  # Rachel
+            "EXAVITQu4vr4xnSDxMaL",  # Bella
+            "MF3mGyEYCl7XYWbV9V6O",  # Elli
+        ]
+        male_voices = [
+            "pNInz6obpgDQGcFmaJgB",  # Adam
+            "ErXwobaYiN019PkySvjV",  # Antoni
+            "TxGEqnHWrfWFTfGW9XjX",  # Josh
+            "yoZ06aMxZJJ28mfd3POQ",  # Sam
+        ]
+
+        # Collect speaker names from metadata + parse script for "<Name>:" lines.
+        names: List[str] = []
+        for s in speakers_meta:
+            n = s.get("name") or s.get("speaker")
+            if n and n not in names:
+                names.append(n)
+        for line in (script or "").splitlines():
+            head = line.split(":", 1)[0].strip() if ":" in line else ""
+            if head and 1 <= len(head) <= 40 and head not in names:
+                names.append(head)
+
+        out: Dict[str, str] = {}
+        f_i = m_i = 0
+        for s in speakers_meta:
+            name = s.get("name") or s.get("speaker") or ""
+            if not name:
+                continue
+            gender = (s.get("gender") or "").lower()
+            if gender.startswith("f"):
+                out[name] = female_voices[f_i % len(female_voices)]
+                f_i += 1
+            elif gender.startswith("m"):
+                out[name] = male_voices[m_i % len(male_voices)]
+                m_i += 1
+        # Fill in any names that didn't come from metadata.
+        for name in names:
+            if name in out:
+                continue
+            # Heuristic by stereotypical English first names.
+            if name.lower() in {"sarah", "anya", "emily", "maria", "grace", "rachel", "anna", "lisa", "kate", "emma"}:
+                out[name] = female_voices[f_i % len(female_voices)]
+                f_i += 1
+            elif name.lower() in {"tom", "liam", "john", "ben", "alex", "lucas", "mark", "david", "james", "mike"}:
+                out[name] = male_voices[m_i % len(male_voices)]
+                m_i += 1
+            else:
+                # Round-robin between pools so 2 unknown speakers still sound different.
+                if (f_i + m_i) % 2 == 0:
+                    out[name] = female_voices[f_i % len(female_voices)]
+                    f_i += 1
+                else:
+                    out[name] = male_voices[m_i % len(male_voices)]
+                    m_i += 1
+        return out
+
+    # ---- Helpers ----
+
+    def _resolve_voice_id(
+        self, speaker_config: Optional[List[Dict[str, Any]]]
+    ) -> str:
+        """Pick a voice_id from speaker_config; fall back to env or Rachel."""
+        if speaker_config:
+            first = speaker_config[0]
+            # Prefer explicit voice_id if caller supplied one.
+            vid = first.get("voice_id")
+            if vid:
+                return vid
+            name = first.get("voice_name") or first.get("name")
+            if name:
+                # Case-insensitive name lookup.
+                for k, v in NAME_TO_VOICE_ID.items():
+                    if k.lower() == str(name).lower():
+                        return v
+        # Per-deployment override: ELEVENLABS_VOICE_ID env var (optional).
+        env_voice = getattr(settings, "ELEVENLABS_VOICE_ID", None)
+        if env_voice:
+            return env_voice
+        return DEFAULT_VOICE_ID
+
+
+# Singleton ----------------------------------------------------------------
+
+_elevenlabs_instance: Optional[ElevenLabsTTSService] = None
+_elevenlabs_lock: Optional[asyncio.Lock] = None
 
 
 async def get_elevenlabs_tts_service() -> ElevenLabsTTSService:
-    """Return a thread-safe singleton ElevenLabsTTSService."""
-    global _elevenlabs_tts_instance, _elevenlabs_tts_lock
-    if _elevenlabs_tts_lock is None:
-        _elevenlabs_tts_lock = asyncio.Lock()
-    if _elevenlabs_tts_instance is None:
-        async with _elevenlabs_tts_lock:
-            if _elevenlabs_tts_instance is None:
-                _elevenlabs_tts_instance = ElevenLabsTTSService()
-    return _elevenlabs_tts_instance
+    """Get or create a singleton ElevenLabs TTS service."""
+    global _elevenlabs_instance, _elevenlabs_lock
+    if _elevenlabs_lock is None:
+        _elevenlabs_lock = asyncio.Lock()
+    if _elevenlabs_instance is None:
+        async with _elevenlabs_lock:
+            if _elevenlabs_instance is None:
+                _elevenlabs_instance = ElevenLabsTTSService()
+                logger.info("ElevenLabs TTS service singleton instance created")
+    return _elevenlabs_instance

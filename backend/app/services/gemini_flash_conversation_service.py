@@ -75,14 +75,21 @@ class GeminiFlashConversationService:
             }
 
         try:
-            # Step 1+2: Transcribe via ElevenLabs Scribe. Google Cloud STT was
-            # returning PERMISSION_DENIED in production (the project tied to
-            # the API key doesn't have Speech-to-Text enabled and we can't
-            # enable it from outside that project). ElevenLabs Scribe uses the
-            # same key we already have wired up for TTS. (Switched 2026-05-08.)
+            # Step 1+2: STT with a 3-stage fallback chain so a single failing
+            # provider can never silently break Live Conversation:
+            #   1. ELSA Unscripted (also gives transcript + IELTS/CEFR scores)
+            #   2. ElevenLabs Scribe (existing key, no GCP gymnastics)
+            #   3. Google Cloud STT (last resort — needs the GCP project to
+            #      have the Speech API enabled, which currently it doesn't)
+            from app.services.elsa_unscripted_service import ELSAUnscriptedService
             from app.services.elevenlabs_asr_service import ElevenLabsASRService
-            stt = ElevenLabsASRService()
-            stt_result = await stt.transcribe(audio_data, language_code="en-US")
+            from app.services.asr_service import GoogleSTTService
+
+            stt_result = await ELSAUnscriptedService().transcribe(audio_data)
+            if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
+                stt_result = await ElevenLabsASRService().transcribe(audio_data)
+            if not stt_result.get("success") or not (stt_result.get("text") or "").strip():
+                stt_result = await GoogleSTTService().transcribe(audio_data, language_code="en-US")
 
             if not stt_result.get("success"):
                 return {

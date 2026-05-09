@@ -205,6 +205,103 @@ async def get_new_words_to_learn(
     )
     return new_words
 
+
+@router.post("/my/add")
+async def add_word_to_my_list(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """Add a custom word to the user's vocabulary list.
+
+    The user types a word; if it's already in the global vocabulary table we
+    re-use that row, otherwise we ask Gemini for a learner-friendly
+    definition/example/part-of-speech and create a new vocabulary row first,
+    then enrol the user in it. The word becomes available immediately in the
+    daily review queue.
+    """
+    from sqlalchemy import select, and_, func
+    from app.models.content import Vocabulary, UserVocabulary, VocabularyStatus
+
+    word_input = (payload.get("word") or "").strip()
+    if not word_input:
+        raise HTTPException(status_code=400, detail="word is required")
+    if len(word_input) > 100:
+        raise HTTPException(status_code=400, detail="word too long")
+
+    # Find an existing vocabulary row (case-insensitive).
+    existing_q = await db.execute(
+        select(Vocabulary).where(func.lower(Vocabulary.word) == word_input.lower())
+    )
+    vocab = existing_q.scalars().first()
+
+    # Build a new vocabulary row if needed, asking Gemini for a definition.
+    if not vocab:
+        definition = (payload.get("definition") or "").strip()
+        example = (payload.get("example") or "").strip()
+        part_of_speech = (payload.get("part_of_speech") or "").strip() or None
+
+        if not definition:
+            try:
+                from app.services.ai_service import ai_service
+                ai_result = await ai_service.generate_vocabulary_explanation(
+                    word=word_input, level=current_user.current_level.value
+                )
+                if ai_result.get("success"):
+                    parsed = ai_result.get("content") or {}
+                    if isinstance(parsed, dict):
+                        definition = definition or str(parsed.get("definition") or "").strip()
+                        example = example or str(parsed.get("example") or parsed.get("example_sentence") or "").strip()
+                        part_of_speech = part_of_speech or str(parsed.get("part_of_speech") or "").strip() or None
+            except Exception:
+                pass
+
+        if not definition:
+            definition = f"User-added word: {word_input}"
+
+        vocab = Vocabulary(
+            word=word_input,
+            definition=definition,
+            example_sentence=example or None,
+            part_of_speech=part_of_speech,
+            difficulty_level=current_user.current_level,
+            cefr_source="user-added",
+            is_active=True,
+        )
+        db.add(vocab)
+        await db.commit()
+        await db.refresh(vocab)
+
+    # Enrol the user (idempotent — if they already have it, return the row).
+    enrolled_q = await db.execute(
+        select(UserVocabulary).where(
+            and_(
+                UserVocabulary.user_id == current_user.id,
+                UserVocabulary.vocabulary_id == vocab.id,
+            )
+        )
+    )
+    user_word = enrolled_q.scalars().first()
+    if not user_word:
+        user_word = UserVocabulary(
+            user_id=current_user.id,
+            vocabulary_id=vocab.id,
+            status=VocabularyStatus.LEARNING,
+        )
+        db.add(user_word)
+        await db.commit()
+        await db.refresh(user_word)
+
+    return {
+        "success": True,
+        "vocabulary_id": vocab.id,
+        "word": vocab.word,
+        "definition": vocab.definition,
+        "example": vocab.example_sentence,
+        "part_of_speech": vocab.part_of_speech,
+        "already_existed": user_word is not None and user_word.id is not None,
+    }
+
 @router.post("/my/words/{vocabulary_id}/progress")
 async def update_word_progress(
     vocabulary_id: int,
