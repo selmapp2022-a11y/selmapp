@@ -1,5 +1,4 @@
 from typing import List, Optional, Dict, Any
-from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -9,7 +8,6 @@ from app.crud.listening import (
     crud_audio_content, crud_listening_exercise,
     crud_listening_attempt, crud_listening_exercise_attempt, crud_listening_progress
 )
-from app.crud.progress import user_progress_crud
 from app.models.listening import AudioType, DifficultyLevel, ExerciseType
 from app.schemas.listening import (
     # Audio Content
@@ -49,7 +47,6 @@ async def generate_listening_exercise(
     topic: str = Body(..., min_length=2),
     difficulty_level: str = Body(default=None),
     content_type: str = Body(default="conversation"),
-    accent: Optional[str] = Body(default=None, description="'american' or 'british' (ElevenLabs only)"),
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db)
 ) -> Dict[str, Any]:
@@ -74,9 +71,10 @@ async def generate_listening_exercise(
         from sqlalchemy import select, and_, or_
         from datetime import datetime
         
-        # Cache key includes accent so American/British versions are stored separately
-        accent_norm = (accent or "").strip().lower() or "default"
-        cache_key = f"listening:{current_user.id}:{topic.lower().replace(' ', '_')}:{level}:{accent_norm}"
+        # Cache key carries a generation version. Bump when the audio
+        # generation strategy changes so old single-voice clips don't
+        # serve forever. v2 = ElevenLabs v3 multi-speaker dialogue.
+        cache_key = f"listening:v2:{current_user.id}:{topic.lower().replace(' ', '_')}:{level}"
         
         result_query = await db.execute(
             select(GeneratedContentCache).where(
@@ -120,8 +118,7 @@ async def generate_listening_exercise(
             topic=topic,
             difficulty_level=level,
             content_type=content_type,
-            speaker_names=["Dr. Anya", "Liam"] if content_type == "conversation" else ["Narrator"],
-            accent=accent,
+            speaker_names=["Dr. Anya", "Liam"] if content_type == "conversation" else ["Narrator"]
         )
         
         if result.get("success"):
@@ -154,9 +151,6 @@ async def generate_listening_exercise(
                     "vocabulary": result.get("vocabulary_focus", []),
                     "speakers": result.get("speakers", []),
                     "content_type": content_type,
-                    "audio_provider": result.get("audio_provider"),
-                    "accent": result.get("accent") or accent,
-                    "voice": result.get("voice"),
                     "points": 30
                 },
                 "metadata": {
@@ -767,15 +761,7 @@ async def submit_listening_exercise(
     await crud_listening_progress.update_progress(
         db, user_id=current_user.id, attempt=completed_attempt
     )
-
-    # Update overall study streak (any completed activity counts toward streak)
-    try:
-        await user_progress_crud.update_streak(
-            db, user_id=current_user.id, study_date=date.today()
-        )
-    except Exception as e:
-        logger.warning(f"update_streak failed (listening submit): {e}")
-
+    
     # Get detailed results
     answers = await crud_answer.get_by_attempt(db, attempt.id)
     
