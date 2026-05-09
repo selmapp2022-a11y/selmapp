@@ -30,23 +30,27 @@ class GoogleSTTService:
         try:
             import aiohttp
 
-            url = (
-                f"https://speech.googleapis.com/v2/projects/-/locations/{self.location}:recognize"
-            )
+            # Use Google STT v1 with API-key auth — v2 needs a real GCP project
+            # (the wildcard `projects/-` returns 404 in REST). v1 takes the API
+            # key as a query param and figures out the encoding from the bytes.
+            # (Switched 2026-05-08 — v2 was returning 404 in production.)
+            url = f"https://speech.googleapis.com/v1/speech:recognize?key={self.api_key}"
 
             req = {
                 "config": {
-                    "autoDecodingConfig": {},
-                    "languageCodes": [language_code],
-                    "features": {
-                        "enableWordTimeOffsets": True,
-                        "enableAutomaticPunctuation": True,
-                    },
+                    "encoding": "WEBM_OPUS",
+                    "sampleRateHertz": 48000,
+                    "languageCode": language_code,
+                    "enableWordTimeOffsets": True,
+                    "enableAutomaticPunctuation": True,
+                    "model": "latest_long",
                 },
-                "content": base64.b64encode(audio_bytes).decode("utf-8"),
+                "audio": {
+                    "content": base64.b64encode(audio_bytes).decode("utf-8"),
+                },
             }
 
-            headers = {"Content-Type": "application/json", "X-Goog-Api-Key": self.api_key}
+            headers = {"Content-Type": "application/json"}
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, data=json.dumps(req)) as resp:
@@ -54,13 +58,12 @@ class GoogleSTTService:
                     if "application/json" in ct:
                         data = await resp.json()
                     else:
-                        # Non-JSON error (e.g., HTML) → capture text and return gracefully
                         text = await resp.text()
                         return {"success": False, "error": {"status": resp.status, "body": text[:500]}}
                     if resp.status != 200:
                         return {"success": False, "error": data}
 
-            # Parse v2 response
+            # Parse v1 response
             transcript_text = ""
             words: List[Dict[str, Any]] = []
             confidence = 0.0
@@ -71,8 +74,8 @@ class GoogleSTTService:
                 transcript_text = alt.get("transcript", "")
                 confidence = alt.get("confidence", 0.0)
                 for w in alt.get("words", []):
-                    start = self._to_ms(w.get("startOffset"))
-                    end = self._to_ms(w.get("endOffset"))
+                    start = self._to_ms_v1(w.get("startTime"))
+                    end = self._to_ms_v1(w.get("endTime"))
                     words.append(
                         {
                             "word": w.get("word", ""),
@@ -91,8 +94,19 @@ class GoogleSTTService:
             }
 
         except Exception as e:
-            logger.error(f"STT v2 transcription error: {e}")
+            logger.error(f"STT v1 transcription error: {e}")
             return {"success": False, "error": str(e)}
+
+    def _to_ms_v1(self, offset: Optional[str]) -> Optional[int]:
+        """v1 returns time as a string like '1.234s'."""
+        if not offset:
+            return None
+        try:
+            if isinstance(offset, str) and offset.endswith("s"):
+                return int(float(offset[:-1]) * 1000)
+        except Exception:
+            return None
+        return None
 
     def _to_ms(self, offset: Optional[str]) -> Optional[int]:
         if not offset:
