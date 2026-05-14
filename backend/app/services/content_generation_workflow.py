@@ -1374,9 +1374,12 @@ class ContentGenerationWorkflow:
             )
 
             if not listening_result["success"]:
-                # Fallback to basic content if TTS fails
+                # Fallback to Gemini-generated transcript (2026-05-13
+                # minimal fix). The previous synchronous fallback
+                # returned a one-line placeholder ("Listening content
+                # about X for Y level") which is what users were seeing.
                 logger.warning(f"TTS generation failed for topic '{topic}': {listening_result.get('error', 'Unknown error')}")
-                return self._generate_fallback_listening_content(topic, user.current_level.value)
+                return await self._generate_fallback_listening_content(topic, user.current_level.value)
 
             # Transform the result to match expected format
             listening_content = {
@@ -1425,24 +1428,68 @@ class ContentGenerationWorkflow:
 
         except Exception as e:
             logger.error(f"Failed to generate listening content: {e}")
-            return self._generate_fallback_listening_content(topic, user.current_level.value)
+            return await self._generate_fallback_listening_content(topic, user.current_level.value)
 
-    def _generate_fallback_listening_content(self, topic: str, level: str) -> Dict[str, Any]:
-        """Generate basic listening content when TTS fails"""
+    async def _generate_fallback_listening_content(self, topic: str, level: str) -> Dict[str, Any]:
+        """Generate listening content via Gemini when multi-voice TTS fails.
+
+        2026-05-13 minimal fix — the previous version returned a fixed
+        ``"Listening content about {topic} for {level} level"`` string
+        that every user saw whenever TTS audio failed to render. Now
+        we ask Gemini for a real short dialogue text. Same return shape
+        as before, so no caller needs changes.
+        """
+        transcript = ""
+        try:
+            from app.services.ai_service import ai_service
+            if ai_service.gemini_model:
+                import asyncio as _asyncio
+                length_by_level = {
+                    "A1": "60-90 words",
+                    "A2": "90-130 words",
+                    "B1": "130-180 words",
+                    "B2": "180-240 words",
+                    "C1": "240-320 words",
+                    "C2": "320-400 words",
+                }.get(level, "130-180 words")
+                prompt = (
+                    f"Write a short two-speaker dialogue for English "
+                    f"learners about \"{topic}\". Length: {length_by_level}. "
+                    f"Level: CEFR {level}. Use TWO speakers with distinct "
+                    f"names. Format every line exactly as 'Name: line of "
+                    f"dialogue.' on its own line. Each speaker must speak "
+                    f"at least twice. Be concrete and natural. Reply ONLY "
+                    f"with the dialogue lines."
+                )
+                resp = await _asyncio.wait_for(
+                    _asyncio.to_thread(ai_service.gemini_model.generate_content, prompt),
+                    timeout=30.0,
+                )
+                transcript = (getattr(resp, "text", "") or "").strip()
+        except Exception as e:
+            logger.warning(
+                "Gemini fallback for listening content failed: %s", e,
+            )
+
+        if not transcript:
+            transcript = (
+                f"Listening content for {topic} is temporarily unavailable."
+            )
+
         listening_content = {
             "topic": topic,
             "level": level,
-            "audio_script": f"Listening content about {topic} for {level} level",
+            "audio_script": transcript,
             "comprehension_questions": [
                 {
                     "question": f"What is the main topic of this audio?",
                     "correct_answer": topic,
-                    "type": "short_answer"
+                    "type": "short_answer",
                 }
             ],
             "audio_url": None,
             "duration_seconds": 120,
-            "fallback": True
+            "fallback": True,
         }
 
         return {"success": True, "content": listening_content}
@@ -1661,55 +1708,119 @@ class ContentGenerationWorkflow:
         topic: str,
         user_context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Generate speaking content with read-aloud text for pronunciation practice"""
+        """Generate speaking content (read-aloud passage).
+
+        2026-05-13 minimal fix — this function used to ALWAYS return
+        one of seven hardcoded paragraphs from
+        :meth:`_generate_read_aloud_text` (daily life / travel / food /
+        work / health / entertainment / education). Gemini was never
+        called. Every speaking practice the iPhone showed was the same
+        paragraph for the same topic.
+
+        Now we call Gemini for a real read-aloud passage. The hardcoded
+        ``_generate_read_aloud_text`` method is kept ONLY as a last
+        resort when Gemini itself is unreachable.
+        """
+        level = user.current_level.value
+        speaking_content: Optional[Dict[str, Any]] = None
 
         try:
-            level = user.current_level.value
-            
-            # Generate a proper read-aloud text based on topic and level
-            read_aloud_text = self._generate_read_aloud_text(topic, level)
-            
-            # Build standardized speaking content structure with read-aloud mode
+            from app.services.ai_service import ai_service
+            if ai_service.gemini_model:
+                import asyncio as _asyncio
+                import json as _json
+                sentence_count = {
+                    "A1": (4, 6),
+                    "A2": (5, 7),
+                    "B1": (6, 9),
+                    "B2": (7, 11),
+                    "C1": (8, 13),
+                    "C2": (10, 15),
+                }.get(level, (6, 9))
+                lo, hi = sentence_count
+                prompt = (
+                    f"Write a short read-aloud passage for an English "
+                    f"learner to practise pronunciation. Topic: \"{topic}\". "
+                    f"CEFR level: {level}. {lo}-{hi} natural sentences. "
+                    f"Concrete and engaging — anchor in a specific moment, "
+                    f"place or person, not generic phrasing. Mix tricky "
+                    f"phonemes (th, sh, ch, r, l, vowel pairs) where the "
+                    f"level allows.\n\n"
+                    "Reply ONLY with valid JSON of this shape:\n"
+                    "{\n"
+                    '  "passage": "the full text",\n'
+                    '  "sentences": ["sentence 1", "sentence 2", "..."],\n'
+                    '  "vocabulary_focus": ["word1", "word2", "..."]\n'
+                    "}"
+                )
+                resp = await _asyncio.wait_for(
+                    _asyncio.to_thread(ai_service.gemini_model.generate_content, prompt),
+                    timeout=30.0,
+                )
+                raw = (getattr(resp, "text", "") or "").strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+                    raw = raw.rsplit("```", 1)[0].strip()
+                try:
+                    data = _json.loads(raw)
+                except Exception:
+                    import re as _re
+                    m = _re.search(r"\{[\s\S]*\}", raw)
+                    data = _json.loads(m.group(0)) if m else {}
+
+                passage = (data.get("passage") or "").strip()
+                sentences = [
+                    str(s).strip()
+                    for s in (data.get("sentences") or [])
+                    if str(s).strip()
+                ]
+                vocab_focus = [
+                    str(v).strip()
+                    for v in (data.get("vocabulary_focus") or [])
+                    if str(v).strip()
+                ][:6]
+                if passage and sentences:
+                    speaking_content = {
+                        "topic": topic,
+                        "level": level,
+                        "content_type": "speaking",
+                        "mode": "read_aloud",
+                        "prompt_text": passage,
+                        "sentences": sentences,
+                        "vocabulary_focus": vocab_focus,
+                        "speaking_tips": [
+                            "Read each sentence clearly and naturally",
+                            "Focus on the highlighted vocabulary words",
+                            "Keep a steady, conversational pace",
+                            "Express the meaning as you speak",
+                        ],
+                    }
+        except Exception as e:
+            logger.warning(
+                "Gemini speaking generation failed for topic=%s level=%s: %s; "
+                "falling back to offline read-aloud templates.",
+                topic, level, e,
+            )
+
+        if speaking_content is None:
+            fallback = self._generate_read_aloud_text(topic, level)
             speaking_content = {
                 "topic": topic,
                 "level": level,
                 "content_type": "speaking",
                 "mode": "read_aloud",
-                # Main text for the user to read aloud
-                "prompt_text": read_aloud_text["primary"],
-                # Individual sentences for step-by-step practice
-                "sentences": read_aloud_text["sentences"],
-                # Vocabulary words highlighted in the text
-                "vocabulary_focus": read_aloud_text["vocabulary_focus"],
-                # Tips for speaking
-                "speaking_tips": [
-                    "Read each sentence clearly and naturally",
-                    "Focus on pronunciation of highlighted words",
-                    "Maintain a steady, conversational pace",
-                    "Try to express the meaning as you speak"
-                ],
-            }
-
-            return {"success": True, "content": speaking_content}
-
-        except Exception as e:
-            logger.error(f"Speaking generation error: {e}")
-            # Return a fallback read-aloud text
-            fallback_content = self._generate_read_aloud_text(topic, user.current_level.value)
-            return {"success": True, "content": {
-                "topic": topic,
-                "level": user.current_level.value,
-                "content_type": "speaking",
-                "mode": "read_aloud",
-                "prompt_text": fallback_content["primary"],
-                "sentences": fallback_content["sentences"],
-                "vocabulary_focus": fallback_content["vocabulary_focus"],
+                "prompt_text": fallback["primary"],
+                "sentences": fallback["sentences"],
+                "vocabulary_focus": fallback["vocabulary_focus"],
                 "speaking_tips": [
                     "Read each sentence clearly",
                     "Focus on pronunciation",
-                    "Speak at a natural pace"
+                    "Speak at a natural pace",
                 ],
-            }}
+                "is_offline_fallback": True,
+            }
+
+        return {"success": True, "content": speaking_content}
 
     def _generate_read_aloud_text(self, topic: str, level: str) -> Dict[str, Any]:
         """Generate read-aloud text appropriate for the topic and level"""

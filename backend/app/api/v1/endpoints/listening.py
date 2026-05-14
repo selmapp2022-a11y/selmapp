@@ -183,12 +183,15 @@ async def generate_listening_exercise(
             
             return response_data
         else:
-            # Fallback response with mock data
-            return _generate_fallback_listening(topic, level, content_type)
-            
+            # Fallback response — call Gemini for a real transcript
+            # instead of returning the hardcoded "Hello today we talk
+            # about ..." template that every user used to see when the
+            # multi-voice path failed. (2026-05-13 minimal fix.)
+            return await _generate_fallback_listening(topic, level, content_type)
+
     except Exception as e:
         logger.error(f"Failed to generate listening exercise: {e}")
-        return _generate_fallback_listening(topic, difficulty_level or "B1", content_type)
+        return await _generate_fallback_listening(topic, difficulty_level or "B1", content_type)
 
 
 @router.get("/audio-status/{exercise_id}")
@@ -445,20 +448,65 @@ async def heal_listening_audio_cache(
         }
 
 
-def _generate_fallback_listening(topic: str, level: str, content_type: str) -> Dict[str, Any]:
-    """Generate fallback listening content when TTS is unavailable"""
-    
-    # Create a sample transcript
-    sample_transcripts = {
-        "A1": f"Hello! Today we talk about {topic}. It is very interesting. Let's learn together!",
-        "A2": f"Welcome to our lesson about {topic}. This is an important topic. We will learn new words today.",
-        "B1": f"In today's discussion, we'll explore {topic}. This topic has many interesting aspects. Let's discover them together.",
-        "B2": f"Today's conversation focuses on {topic}. We'll examine different perspectives and key concepts related to this subject.",
-        "C1": f"Our in-depth analysis today covers {topic}. We'll delve into the nuances and complexities of this fascinating subject.",
-        "C2": f"Welcome to our comprehensive exploration of {topic}. We'll examine the multifaceted aspects and subtle implications of this topic."
-    }
-    
-    transcript = sample_transcripts.get(level, sample_transcripts["B1"])
+async def _generate_fallback_listening(topic: str, level: str, content_type: str) -> Dict[str, Any]:
+    """Generate fallback listening content when multi-voice TTS is unavailable.
+
+    2026-05-13 minimal fix — was returning a hardcoded one-line
+    template ("Hello! Today we talk about X. It is very interesting.
+    Let's learn together!") for every level, which meant every user
+    whose listening generation fell back hit the same eight words.
+    Now we ask Gemini for a real short dialogue. If Gemini itself is
+    unreachable we degrade to a still-templated transcript so the
+    endpoint never crashes — but in normal operation the user sees
+    fresh, varied content.
+    """
+    transcript = ""
+    try:
+        from app.services.ai_service import ai_service
+        if ai_service.gemini_model:
+            import asyncio as _asyncio
+            import json as _json
+            length_by_level = {
+                "A1": "60-90 words",
+                "A2": "90-130 words",
+                "B1": "130-180 words",
+                "B2": "180-240 words",
+                "C1": "240-320 words",
+                "C2": "320-400 words",
+            }.get(level, "130-180 words")
+            prompt = (
+                f"Write a short multi-speaker {content_type} for English "
+                f"learners about \"{topic}\". Length: {length_by_level}. "
+                f"Level: CEFR {level}. Use TWO speakers with distinct "
+                f"names. Format every line exactly as 'Name: line of "
+                f"dialogue.' on its own line. Each speaker must speak at "
+                f"least twice — do not write a monologue. Make the "
+                f"content concrete and engaging, not generic textbook "
+                f"phrasing. Reply ONLY with the dialogue lines, no JSON, "
+                f"no preamble, no extra commentary."
+            )
+            resp = await _asyncio.wait_for(
+                _asyncio.to_thread(ai_service.gemini_model.generate_content, prompt),
+                timeout=30.0,
+            )
+            transcript = (getattr(resp, "text", "") or "").strip()
+            if transcript.startswith("```"):
+                transcript = transcript.split("\n", 1)[1] if "\n" in transcript else transcript
+                transcript = transcript.rsplit("```", 1)[0].strip()
+    except Exception as e:
+        logger.warning(
+            "Gemini fallback transcript generation failed for topic=%s level=%s: %s",
+            topic, level, e,
+        )
+
+    # Last-resort safety net so we never crash. Only reached when
+    # Gemini itself is down. Phrasing is intentionally honest rather
+    # than pretending to be real lesson content.
+    if not transcript:
+        transcript = (
+            f"Listening content for {topic} is temporarily unavailable. "
+            "Please try again in a moment."
+        )
     
     return {
         "success": True,
