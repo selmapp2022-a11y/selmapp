@@ -650,23 +650,84 @@ Return ONLY valid JSON (no markdown):
 Make the prompt engaging and appropriate for {level} level."""
 
         elif skill_type.lower() == 'speaking':
+            # 2026-05-24 fix — production previously asked for the SAME
+            # "8-16 words, natural sentence" for every CEFR level, so A1
+            # and C1 users got near-identical practice content. Now we
+            # inject explicit per-level vocabulary / grammar / sentence
+            # length / phoneme-density rules so the read-aloud line
+            # genuinely matches the learner's level.
+            speaking_specs = {
+                "A1": {
+                    "words": "6-10 words",
+                    "vocabulary": "top ~800 most frequent English words only",
+                    "grammar": "present simple or past simple; subject-verb-object",
+                    "sentence": "one short clause, no subordination",
+                    "phonemes": "common sounds (b, p, t, d, k, g, m, n, s); avoid clusters",
+                },
+                "A2": {
+                    "words": "8-13 words",
+                    "vocabulary": "top ~1500 words; one common phrasal verb is fine",
+                    "grammar": "present, past, future with will/going to",
+                    "sentence": "one or two clauses joined by and / but / because",
+                    "phonemes": "include at least one of: th, sh, r, l",
+                },
+                "B1": {
+                    "words": "12-18 words",
+                    "vocabulary": "top ~2500 words; common collocations and one idiom is fine",
+                    "grammar": "all tenses, first/second conditional, modal verbs",
+                    "sentence": "two clauses with a clear connector (however, although, so)",
+                    "phonemes": "mix tricky consonant clusters (str, spl, thr) and a vowel pair",
+                },
+                "B2": {
+                    "words": "16-24 words",
+                    "vocabulary": "top ~4000 words; phrasal verbs and idiomatic phrases used naturally",
+                    "grammar": "mixed conditionals, passive voice, reported speech, relative clauses",
+                    "sentence": "two-to-three clauses with subordination and varied rhythm",
+                    "phonemes": "challenging combinations including silent letters and weak forms",
+                },
+                "C1": {
+                    "words": "20-30 words",
+                    "vocabulary": "wide-ranging including academic and idiomatic; precise word choice",
+                    "grammar": "advanced structures: inversions, cleft sentences, nuanced modality",
+                    "sentence": "long sentence with embedded clauses and discourse markers",
+                    "phonemes": "dense consonant clusters and intonation-bearing function words",
+                },
+                "C2": {
+                    "words": "24-36 words",
+                    "vocabulary": "full native-speaker range including low-frequency, figurative and stylistic choices",
+                    "grammar": "complex syntax; allow stylistic inversion, fronting, ellipsis",
+                    "sentence": "elaborate periodic sentence with multiple embedded ideas",
+                    "phonemes": "stress-timed rhythm, weak forms, linking, assimilation",
+                },
+            }
+            spec = speaking_specs.get(level, speaking_specs["B1"])
             prompt = f"""Generate a PRONUNCIATION (read-aloud) speaking exercise for {level} level English learners.
 Theme/topic: "{topic}"
+
+LEVEL SPEC (must follow strictly):
+- Length: {spec['words']}
+- Vocabulary: {spec['vocabulary']}
+- Grammar: {spec['grammar']}
+- Sentence structure: {spec['sentence']}
+- Phoneme target: {spec['phonemes']}
 
 Return ONLY valid JSON (no markdown):
 {{
   "type": "speaking",
-  "question": "ONE complete, natural sentence (8-16 words) the learner will read aloud. Correct grammar. Starts with a capital letter and ends with punctuation.",
+  "question": "ONE complete, natural sentence the learner will read aloud, matching every constraint above. Correct grammar. Starts with a capital letter and ends with punctuation.",
   "keywords": ["4-6 SINGLE WORDS from the sentence (no spaces)"],
   "sample_response": "Repeat the exact same sentence from 'question' (verbatim).",
   "points": 15
 }}
 
 RULES:
-- 'question' must be a sentence to read aloud, NOT an instruction (avoid: Describe..., Talk about..., Explain..., Answer...)
-- No blanks, no brackets, no quotes, no emojis
-- Keep it practical and conversational, with topic-relevant vocabulary
-- Keep grammar correct and level-appropriate"""
+- 'question' must be a sentence to read aloud, NOT an instruction
+  (avoid: Describe..., Talk about..., Explain..., Answer...).
+- No blanks, no brackets, no quotes, no emojis.
+- Pick a concrete situation; vary phonemes so SpeechAce can score
+  pronunciation usefully.
+- Stay within the level spec — do NOT exceed the word count or use
+  vocabulary above the level."""
 
         else:  # grammar or default
             prompt = f"""Generate {count} quick grammar practice items for {level} level English learners.
