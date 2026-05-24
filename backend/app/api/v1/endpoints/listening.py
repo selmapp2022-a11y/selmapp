@@ -1,9 +1,16 @@
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
+import asyncio
 import logging
+import re
+import uuid
+from datetime import datetime
+
+import httpx
 
 from app.api import deps
+from app.core.config import settings
 from app.crud.listening import (
     crud_audio_content, crud_listening_exercise,
     crud_listening_attempt, crud_listening_exercise_attempt, crud_listening_progress
@@ -29,6 +36,7 @@ from app.schemas.listening import (
 from app.models.user import User
 from app.services.gemini_tts_service import get_tts_service
 from app.services.audio_healing_service import audio_healing_service
+from app.services.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +456,134 @@ async def heal_listening_audio_cache(
         }
 
 
+# 2026-05-23: minimal multi-voice rendering for the listening
+# fallback path. When the main multi-voice TTS pipeline fails (Eleven
+# v3 dialogue endpoint, the usual offender), we still want listening
+# exercises to play with TWO distinct voices instead of one narrator
+# reading both speakers' lines. This helper takes the Gemini-generated
+# transcript ("Name: line\n…"), assigns each unique speaker a
+# rotating American voice (Rachel female, Adam male), renders each
+# turn through the ElevenLabs single-voice endpoint IN PARALLEL with
+# bounded concurrency so we don't blow latency, concatenates the MP3
+# chunks, and persists the result. Returns the audio_url or empty
+# string on any failure (caller then displays transcript without
+# audio rather than playing one-voice fallback).
+_LISTENING_VOICE_FEMALE = "21m00Tcm4TlvDq8ikWAM"  # Rachel — American
+_LISTENING_VOICE_MALE = "pNInz6obpgDQGcFmaJgB"    # Adam — American
+_LISTENING_MODEL_ID = "eleven_turbo_v2_5"
+_ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+_LISTENING_TTS_TIMEOUT = 15.0
+_LISTENING_TTS_CONCURRENCY = 4
+
+
+async def _render_listening_dialogue_audio(transcript: str) -> str:
+    """Render a 'Name: line\\n' transcript as a multi-voice MP3.
+
+    Returns the persisted audio URL, or empty string if any step
+    fails. Designed to be a strictly additive enhancement to the
+    fallback path — never raises, never blocks the response.
+    """
+    api_key = getattr(settings, "ELEVENLABS_API_KEY", None)
+    if not api_key or not (transcript or "").strip():
+        return ""
+
+    # Parse "Name: line" turns. Tight regex so we don't accidentally
+    # capture multi-line paragraphs.
+    turns: List[tuple] = []
+    for match in re.finditer(
+        r"^([A-Za-z][\w\-'. ]{0,38}):\s*(.+)$",
+        transcript,
+        re.MULTILINE,
+    ):
+        speaker = match.group(1).strip()
+        text = match.group(2).strip()
+        if speaker and text:
+            turns.append((speaker, text))
+    if len(turns) < 2:
+        # Not a dialogue we can split — let the main TTS path handle it.
+        return ""
+
+    # Voice assignment: first unique speaker → female, second → male.
+    unique_speakers: List[str] = []
+    for sp, _ in turns:
+        if sp not in unique_speakers:
+            unique_speakers.append(sp)
+    voices = [_LISTENING_VOICE_FEMALE, _LISTENING_VOICE_MALE]
+    voice_map: Dict[str, str] = {
+        sp: voices[i % len(voices)] for i, sp in enumerate(unique_speakers)
+    }
+
+    sem = asyncio.Semaphore(_LISTENING_TTS_CONCURRENCY)
+    headers = {
+        "xi-api-key": api_key,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+    }
+
+    async def _render_turn(idx: int, speaker: str, text: str) -> tuple:
+        voice_id = voice_map[speaker]
+        payload = {
+            "text": text,
+            "model_id": _LISTENING_MODEL_ID,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.85,
+                "style": 0.25,
+                "use_speaker_boost": True,
+            },
+        }
+        async with sem:
+            try:
+                async with httpx.AsyncClient(timeout=_LISTENING_TTS_TIMEOUT) as client:
+                    resp = await client.post(
+                        _ELEVENLABS_TTS_URL.format(voice_id=voice_id),
+                        headers=headers,
+                        json=payload,
+                    )
+                if resp.status_code == 200:
+                    return idx, resp.content
+                logger.warning(
+                    "Listening fallback per-turn TTS failed: status=%s body=%s",
+                    resp.status_code, resp.text[:120],
+                )
+            except Exception as e:
+                logger.warning("Listening fallback per-turn TTS error: %s", e)
+        return idx, b""
+
+    tasks = [_render_turn(i, sp, tx) for i, (sp, tx) in enumerate(turns)]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    results.sort(key=lambda r: r[0])
+
+    chunks = [r[1] for r in results if r[1]]
+    # Need at least 60% of turns to render meaningful audio.
+    if len(chunks) < max(2, int(0.6 * len(turns))):
+        logger.warning(
+            "Listening fallback multi-voice synthesis: too few successful "
+            "turns (%d/%d), giving up on audio",
+            len(chunks), len(turns),
+        )
+        return ""
+
+    audio_bytes = b"".join(chunks)
+    filename = (
+        f"listening_multivoice_"
+        f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_"
+        f"{uuid.uuid4().hex[:8]}.mp3"
+    )
+    try:
+        stored = await audio_storage_service.store_audio(
+            filename=filename,
+            audio_bytes=audio_bytes,
+            content_type="audio/mpeg",
+        )
+    except Exception as e:
+        logger.warning("Failed to persist listening multi-voice audio: %s", e)
+        return ""
+    if isinstance(stored, dict):
+        return stored.get("url", "") or ""
+    return stored or ""
+
+
 async def _generate_fallback_listening(topic: str, level: str, content_type: str) -> Dict[str, Any]:
     """Generate fallback listening content when multi-voice TTS is unavailable.
 
@@ -545,6 +681,11 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
             "Please try again in a moment."
         )
 
+    # 2026-05-23: try to render multi-voice audio for the dialogue we
+    # just generated. If anything fails, audio_url stays empty and the
+    # response shape is identical to before (transcript only).
+    audio_url = await _render_listening_dialogue_audio(transcript)
+
     # Fall back to the old templated questions ONLY if Gemini didn't
     # supply any. In normal operation `gemini_questions` is non-empty
     # and these are unused.
@@ -572,7 +713,10 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
             "title": f"{topic} - Listening Practice",
             "description": f"Listen to the {content_type} about {topic} and answer the questions.",
             "level": level,
-            "audio_url": "",  # No audio available
+            # audio_url is now populated when multi-voice synthesis
+            # succeeds (Gemini transcript → per-turn ElevenLabs).
+            # Empty when it fails — frontend then shows transcript only.
+            "audio_url": audio_url,
             "transcript": transcript,
             "duration_seconds": 60,
             "questions": questions,
