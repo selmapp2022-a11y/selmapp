@@ -284,4 +284,278 @@ async def evaluate_speech(
         }
 
 
+# ── IELTS Speaking Part 3 — abstract multi-turn discussion ───────────────
+# Part 3 is the 4-5 minute exchange that follows the Part 2 cue-card
+# answer. The examiner asks 4-5 open-ended discussion questions about
+# the underlying topic, expecting the candidate to extend, justify, and
+# discuss abstract ideas. We expose this as two endpoints that the iPhone
+# can drive turn-by-turn while staying stateless on the server (the client
+# holds the conversation history and sends it back for final scoring).
+#   POST /speech/ielts/part3/generate-questions
+#     -> {questions: [q1..q5]}
+#   POST /speech/ielts/part3/score-discussion
+#     -> {bands, overall_band, tips, turn_feedback}
+# Each individual turn is still transcribed via the existing
+# /speech/evaluate endpoint with mode="ielts"; this just adds the
+# question-generation + final-scoring pieces specific to Part 3.
+# (2026-05-25 — finding #5 from the 2026-05-24 audit.)
+
+from pydantic import BaseModel as _BaseModel, Field as _Field
+
+
+class _Part3QuestionsRequest(_BaseModel):
+    part2_topic: str = _Field(
+        ...,
+        min_length=4,
+        description=(
+            "The Part 2 cue-card topic the candidate just discussed, "
+            "e.g. 'describe a memorable journey you have taken'."
+        ),
+    )
+    count: int = _Field(
+        default=5,
+        ge=3,
+        le=6,
+        description="How many Part 3 follow-up questions to generate.",
+    )
+
+
+class _Part3Turn(_BaseModel):
+    question: str
+    transcript: str
+
+
+class _Part3ScoreRequest(_BaseModel):
+    part2_topic: str = _Field(..., min_length=4)
+    turns: list = _Field(
+        ...,
+        description=(
+            "Ordered list of {question, transcript} pairs covering "
+            "every Part 3 turn the candidate completed."
+        ),
+    )
+
+
+@router.post("/ielts/part3/generate-questions")
+async def ielts_part3_generate_questions(
+    request: _Part3QuestionsRequest,
+    current_user = Depends(get_current_user),
+):
+    """Generate IELTS Speaking Part 3 follow-up questions tied to the
+    Part 2 cue-card topic. Static fallback questions are returned if
+    Gemini is unreachable, so the iPhone never sees an empty list."""
+    import json as _json
+    import asyncio as _asyncio
+    import google.generativeai as genai
+    from app.core.config import settings as _settings
+
+    questions: list = []
+    if getattr(_settings, "GOOGLE_GEMINI_API_KEY", None):
+        try:
+            genai.configure(api_key=_settings.GOOGLE_GEMINI_API_KEY)
+            model = genai.GenerativeModel(
+                getattr(_settings, "GEMINI_TEXT_MODEL_REASON", _settings.GEMINI_MODEL)
+            )
+            prompt = (
+                "You are an IELTS Speaking examiner running Part 3.\n"
+                f"The candidate just completed Part 2 on the topic:\n"
+                f"  \"{request.part2_topic}\"\n\n"
+                "Generate exactly "
+                f"{request.count} Part 3 follow-up questions that:\n"
+                "  - move from the personal experience of Part 2 to ABSTRACT, "
+                "general, or speculative discussion of the same theme;\n"
+                "  - probe opinions, cause-and-effect, comparisons across "
+                "cultures or time, and predictions about the future;\n"
+                "  - escalate in difficulty (easier first, harder last);\n"
+                "  - are answerable in 30-60 seconds each.\n\n"
+                "Reply ONLY with valid JSON of this exact shape:\n"
+                '{\n  "questions": ["...", "...", "..."]\n}'
+            )
+            loop = _asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None, model.generate_content, prompt
+            )
+            raw = (getattr(response, "text", "") or "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+                raw = raw.rsplit("```", 1)[0]
+            try:
+                data = _json.loads(raw)
+            except Exception:
+                import re as _re
+                m = _re.search(r"\{[\s\S]*\}", raw)
+                data = _json.loads(m.group(0)) if m else {}
+            questions = [
+                str(q).strip()
+                for q in (data.get("questions") or [])
+                if str(q).strip()
+            ]
+        except Exception:
+            questions = []
+
+    if not questions:
+        # Generic Part 3-style fallback covering the four classic angles.
+        questions = [
+            f"In general, why do you think people are interested in {request.part2_topic.lower()}?",
+            "How has this changed compared to your parents' generation?",
+            "Do you think technology has made this easier or harder, and why?",
+            "What might it look like 20 years from now?",
+            "Are there any disadvantages or risks people often overlook?",
+        ][: request.count]
+
+    return {
+        "success": True,
+        "part2_topic": request.part2_topic,
+        "questions": questions,
+        "total_questions": len(questions),
+        "guidance": (
+            "Speak for 30-60 seconds per question. Extend, justify and "
+            "give examples — Part 3 rewards depth over brevity."
+        ),
+    }
+
+
+@router.post("/ielts/part3/score-discussion")
+async def ielts_part3_score_discussion(
+    request: _Part3ScoreRequest,
+    current_user = Depends(get_current_user),
+):
+    """Score an entire IELTS Speaking Part 3 discussion using the
+    official IELTS band descriptors, weighted for Part 3's emphasis on
+    extending, justifying and discussing abstract ideas across turns.
+    """
+    import json as _json
+    import asyncio as _asyncio
+    import google.generativeai as genai
+    from app.core.config import settings as _settings
+
+    # Normalise turns input (list of dicts or list of pydantic-validated).
+    norm_turns = []
+    for t in request.turns or []:
+        if isinstance(t, dict):
+            q = str(t.get("question") or "").strip()
+            tr = str(t.get("transcript") or "").strip()
+        else:
+            q = str(getattr(t, "question", "")).strip()
+            tr = str(getattr(t, "transcript", "")).strip()
+        if q and tr:
+            norm_turns.append({"question": q, "transcript": tr})
+
+    if not norm_turns:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one turn with question + transcript is required.",
+        )
+
+    if not getattr(_settings, "GOOGLE_GEMINI_API_KEY", None):
+        # Without Gemini we can't score holistically; return a stub so the
+        # client still gets a parseable response.
+        return {
+            "success": False,
+            "error": "Scoring unavailable: GOOGLE_GEMINI_API_KEY not configured",
+            "bands": {
+                "fluencyCoherence": None,
+                "lexicalResource": None,
+                "grammarAccuracy": None,
+                "taskResponse": None,
+            },
+            "overall_band": None,
+            "tips": [],
+            "turn_feedback": [],
+        }
+
+    transcript_block = "\n\n".join(
+        f"Q{i + 1}: {t['question']}\nA{i + 1}: {t['transcript']}"
+        for i, t in enumerate(norm_turns)
+    )
+    prompt = (
+        "You are an IELTS Speaking examiner scoring Part 3. The candidate "
+        f"just completed {len(norm_turns)} turns of abstract discussion "
+        f"about the Part 2 topic:\n  \"{request.part2_topic}\"\n\n"
+        "Part 3 specifically rewards:\n"
+        "  - extending answers beyond yes/no;\n"
+        "  - justifying opinions with reasons and examples;\n"
+        "  - discussing abstract / general / speculative ideas;\n"
+        "  - using a range of cohesive devices.\n\n"
+        "Full discussion transcript (auto-transcribed):\n\n"
+        f"{transcript_block}\n\n"
+        "Score using the four official IELTS Speaking criteria on the "
+        "0-9 band scale. For each turn, give one short concrete tip "
+        "quoting an exact phrase the candidate used (or didn't).\n\n"
+        "Reply ONLY with valid JSON of this exact shape:\n"
+        "{\n"
+        '  "fluency_coherence": {"band": 6.0, "comment": "..."},\n'
+        '  "lexical_resource":  {"band": 6.0, "comment": "..."},\n'
+        '  "grammar_accuracy":  {"band": 6.0, "comment": "..."},\n'
+        '  "task_response":     {"band": 6.0, "comment": "..."},\n'
+        '  "overall_band": 6.0,\n'
+        '  "tips": ["actionable tip 1", "actionable tip 2"],\n'
+        '  "turn_feedback": [\n'
+        '    {"turn": 1, "comment": "what this answer did well or missed"}\n'
+        "  ]\n"
+        "}"
+    )
+
+    try:
+        genai.configure(api_key=_settings.GOOGLE_GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            getattr(_settings, "GEMINI_TEXT_MODEL_REASON", _settings.GEMINI_MODEL)
+        )
+        loop = _asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, model.generate_content, prompt
+        )
+        raw = (getattr(response, "text", "") or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+            raw = raw.rsplit("```", 1)[0]
+        try:
+            data = _json.loads(raw)
+        except Exception:
+            import re as _re
+            m = _re.search(r"\{[\s\S]*\}", raw)
+            data = _json.loads(m.group(0)) if m else {}
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Scoring failed: {e}",
+            "bands": {
+                "fluencyCoherence": None,
+                "lexicalResource": None,
+                "grammarAccuracy": None,
+                "taskResponse": None,
+            },
+            "overall_band": None,
+            "tips": [],
+            "turn_feedback": [],
+        }
+
+    overall_band = data.get("overall_band")
+    try:
+        overall_band_f = float(overall_band) if overall_band is not None else None
+    except Exception:
+        overall_band_f = None
+    overall_score_100 = (
+        round(overall_band_f * 100.0 / 9.0)
+        if overall_band_f is not None
+        else None
+    )
+
+    return {
+        "success": True,
+        "part2_topic": request.part2_topic,
+        "turn_count": len(norm_turns),
+        "bands": {
+            "fluencyCoherence": data.get("fluency_coherence"),
+            "lexicalResource": data.get("lexical_resource"),
+            "grammarAccuracy": data.get("grammar_accuracy"),
+            "taskResponse": data.get("task_response"),
+        },
+        "overall_band": overall_band_f,
+        "overall_score": overall_score_100,
+        "tips": data.get("tips") or [],
+        "turn_feedback": data.get("turn_feedback") or [],
+    }
+
+
 
