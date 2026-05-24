@@ -88,11 +88,38 @@ abstract class PracticeRepository {
   /// Trigger content pre-generation after assessment
   Future<void> triggerPostAssessmentGeneration(String level);
 
-  /// Assess writing and get detailed AI feedback
+  /// Assess writing and get detailed AI feedback.
+  /// Pass [taskType] = "ielts_task1_letter" / "ielts_task1_chart" /
+  /// "ielts_task2" to grade against the official IELTS Writing band
+  /// descriptors (response will include ielts_band + ielts_breakdown).
   Future<WritingAssessmentResult> assessWriting({
     required String text,
     String writingType,
     String? userLevel,
+    String? prompt,
+    String? taskType,
+  });
+
+  /// Generate an IELTS-style writing task prompt.
+  /// [taskType] one of: ielts_task1_letter, ielts_task1_chart, ielts_task2.
+  Future<IeltsWritingTask?> generateIeltsWritingTask({
+    required String taskType,
+    String? topicHint,
+  });
+
+  /// Generate the 4-5 abstract follow-up questions for IELTS Speaking
+  /// Part 3, tied to the Part 2 cue-card topic the candidate just
+  /// finished.
+  Future<List<String>> generatePart3Questions({
+    required String part2Topic,
+    int count,
+  });
+
+  /// Score an entire IELTS Speaking Part 3 discussion (all turns).
+  /// Returns the four IELTS band scores + overall band + per-turn tips.
+  Future<Part3DiscussionResult?> scorePart3Discussion({
+    required String part2Topic,
+    required List<Part3Turn> turns,
   });
 
   /// Generate a listening exercise with audio
@@ -652,6 +679,8 @@ class PracticeRepositoryImpl implements PracticeRepository {
     required String text,
     String writingType = 'general',
     String? userLevel,
+    String? prompt,
+    String? taskType,
   }) async {
     try {
       final response = await _apiClient.post(
@@ -660,6 +689,8 @@ class PracticeRepositoryImpl implements PracticeRepository {
           'text': text,
           'writing_type': writingType,
           if (userLevel != null) 'user_level': userLevel,
+          if (prompt != null && prompt.trim().isNotEmpty) 'prompt': prompt,
+          if (taskType != null && taskType.trim().isNotEmpty) 'task_type': taskType,
         },
       );
 
@@ -669,7 +700,14 @@ class PracticeRepositoryImpl implements PracticeRepository {
           responseData['assessment'] != null) {
         final assessment = responseData['assessment'] as Map<String, dynamic>;
         final scores = assessment['scores'] as Map<String, dynamic>? ?? {};
-        
+
+        // 2026-05-25: parse the new IELTS-aligned fields from /assess.
+        final ieltsBand = (assessment['ielts_band'] as num?)?.toDouble();
+        final Map<String, double?>? ieltsBreakdown =
+            (assessment['ielts_breakdown'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(k, (v as num?)?.toDouble()),
+        );
+
         return WritingAssessmentResult(
           success: true,
           scores: WritingScores(
@@ -687,6 +725,8 @@ class PracticeRepositoryImpl implements PracticeRepository {
           suggestions: (assessment['suggestions'] as List?)?.map((e) => e.toString()).toList() ?? [],
           nextSteps: (assessment['next_steps'] as List?)?.map((e) => e.toString()).toList() ?? [],
           correctedVersion: assessment['corrected_version'] as String?,
+          ieltsBand: ieltsBand,
+          ieltsBreakdown: ieltsBreakdown,
         );
       } else {
         return WritingAssessmentResult.fallback();
@@ -696,6 +736,80 @@ class PracticeRepositoryImpl implements PracticeRepository {
         print('Failed to assess writing: $e');
       }
       return WritingAssessmentResult.fallback();
+    }
+  }
+
+  // ─── IELTS Writing task generation ─────────────────────────────────
+  @override
+  Future<IeltsWritingTask?> generateIeltsWritingTask({
+    required String taskType,
+    String? topicHint,
+  }) async {
+    try {
+      final response = await _apiClient.post(
+        '/writing/ielts/generate-task',
+        data: {
+          'task_type': taskType,
+          if (topicHint != null && topicHint.trim().isNotEmpty)
+            'topic_hint': topicHint,
+        },
+      );
+      final data = response.data as Map<String, dynamic>?;
+      if (data == null || data['success'] != true) return null;
+      return IeltsWritingTask.fromJson(data);
+    } catch (e) {
+      if (kDebugMode) print('generateIeltsWritingTask failed: $e');
+      return null;
+    }
+  }
+
+  // ─── IELTS Speaking Part 3 multi-turn ──────────────────────────────
+  @override
+  Future<List<String>> generatePart3Questions({
+    required String part2Topic,
+    int count = 5,
+  }) async {
+    try {
+      final response = await _apiClient.post(
+        '/speech/ielts/part3/generate-questions',
+        data: {
+          'part2_topic': part2Topic,
+          'count': count,
+        },
+      );
+      final data = response.data as Map<String, dynamic>?;
+      if (data == null || data['success'] != true) return [];
+      return (data['questions'] as List?)
+              ?.map((q) => q.toString())
+              .toList() ??
+          [];
+    } catch (e) {
+      if (kDebugMode) print('generatePart3Questions failed: $e');
+      return [];
+    }
+  }
+
+  @override
+  Future<Part3DiscussionResult?> scorePart3Discussion({
+    required String part2Topic,
+    required List<Part3Turn> turns,
+  }) async {
+    try {
+      final response = await _apiClient.post(
+        '/speech/ielts/part3/score-discussion',
+        data: {
+          'part2_topic': part2Topic,
+          'turns': turns
+              .map((t) => {'question': t.question, 'transcript': t.transcript})
+              .toList(),
+        },
+      );
+      final data = response.data as Map<String, dynamic>?;
+      if (data == null) return null;
+      return Part3DiscussionResult.fromJson(data);
+    } catch (e) {
+      if (kDebugMode) print('scorePart3Discussion failed: $e');
+      return null;
     }
   }
 
@@ -908,6 +1022,13 @@ class WritingAssessmentResult {
   final List<String> suggestions;
   final List<String> nextSteps;
   final String? correctedVersion;
+  // 2026-05-25: backend /writing/assess now returns IELTS-aligned
+  // band scores in addition to the 0-100 scores. ``ieltsBand`` is
+  // the overall 0-9 band; ``ieltsBreakdown`` is per-criterion (the
+  // four official IELTS Writing criteria). Both null when scoring
+  // failed or was not requested.
+  final double? ieltsBand;
+  final Map<String, double?>? ieltsBreakdown;
 
   WritingAssessmentResult({
     required this.success,
@@ -920,6 +1041,8 @@ class WritingAssessmentResult {
     required this.suggestions,
     required this.nextSteps,
     this.correctedVersion,
+    this.ieltsBand,
+    this.ieltsBreakdown,
   });
 
   factory WritingAssessmentResult.fallback() {
@@ -943,6 +1066,8 @@ class WritingAssessmentResult {
       ],
       nextSteps: ['Practice writing daily'],
       correctedVersion: null,
+      ieltsBand: null,
+      ieltsBreakdown: null,
     );
   }
 }
@@ -2919,4 +3044,111 @@ class LearningPathExercises {
     ...speakingExercises,
     ...writingExercises,
   ];
+}
+
+// ============ IELTS WRITING TASK (Task 1 / Task 2) ============
+//
+// Returned by POST /writing/ielts/generate-task. Backend assembles
+// the prompt via Gemini (with a static fallback) and bundles the
+// official IELTS task instructions, word-count target, time limit
+// and scoring weight so the UI can render an exam-faithful screen
+// without hard-coding the rules. (2026-05-25 — finding #4.)
+class IeltsWritingTask {
+  final String taskType; // ielts_task1_letter / ielts_task1_chart / ielts_task2
+  final String taskName;
+  final String title;
+  final String promptText;
+  final String instructions;
+  final String wordCountTarget;
+  final int timeLimitMinutes;
+  final String scoringWeight;
+
+  IeltsWritingTask({
+    required this.taskType,
+    required this.taskName,
+    required this.title,
+    required this.promptText,
+    required this.instructions,
+    required this.wordCountTarget,
+    required this.timeLimitMinutes,
+    required this.scoringWeight,
+  });
+
+  factory IeltsWritingTask.fromJson(Map<String, dynamic> json) {
+    return IeltsWritingTask(
+      taskType: json['task_type'] as String? ?? '',
+      taskName: json['task_name'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      promptText: json['prompt_text'] as String? ?? '',
+      instructions: json['instructions'] as String? ?? '',
+      wordCountTarget: json['word_count_target'] as String? ?? '',
+      timeLimitMinutes:
+          (json['time_limit_minutes'] as num?)?.toInt() ?? 0,
+      scoringWeight: json['scoring_weight'] as String? ?? '',
+    );
+  }
+}
+
+// ============ IELTS SPEAKING PART 3 ============
+//
+// Part 3 is the 4-5 minute exchange after the Part 2 cue-card answer.
+// The candidate cycles through `Part3Turn`s (one question + one
+// transcribed answer each), then submits the whole conversation for
+// holistic IELTS-band scoring. (2026-05-25 — finding #5.)
+class Part3Turn {
+  final String question;
+  final String transcript;
+
+  Part3Turn({required this.question, required this.transcript});
+}
+
+class Part3DiscussionResult {
+  final bool success;
+  final String? partTopic;
+  final int turnCount;
+  final Map<String, dynamic>? fluencyCoherence;
+  final Map<String, dynamic>? lexicalResource;
+  final Map<String, dynamic>? grammarAccuracy;
+  final Map<String, dynamic>? taskResponse;
+  final double? overallBand;
+  final int? overallScore;
+  final List<String> tips;
+  final List<Map<String, dynamic>> turnFeedback;
+  final String? error;
+
+  Part3DiscussionResult({
+    required this.success,
+    this.partTopic,
+    this.turnCount = 0,
+    this.fluencyCoherence,
+    this.lexicalResource,
+    this.grammarAccuracy,
+    this.taskResponse,
+    this.overallBand,
+    this.overallScore,
+    this.tips = const [],
+    this.turnFeedback = const [],
+    this.error,
+  });
+
+  factory Part3DiscussionResult.fromJson(Map<String, dynamic> json) {
+    final bands = json['bands'] as Map<String, dynamic>? ?? const {};
+    return Part3DiscussionResult(
+      success: json['success'] as bool? ?? false,
+      partTopic: json['part2_topic'] as String?,
+      turnCount: (json['turn_count'] as num?)?.toInt() ?? 0,
+      fluencyCoherence: bands['fluencyCoherence'] as Map<String, dynamic>?,
+      lexicalResource: bands['lexicalResource'] as Map<String, dynamic>?,
+      grammarAccuracy: bands['grammarAccuracy'] as Map<String, dynamic>?,
+      taskResponse: bands['taskResponse'] as Map<String, dynamic>?,
+      overallBand: (json['overall_band'] as num?)?.toDouble(),
+      overallScore: (json['overall_score'] as num?)?.toInt(),
+      tips: (json['tips'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      turnFeedback: (json['turn_feedback'] as List?)
+              ?.map((e) => Map<String, dynamic>.from(e as Map))
+              .toList() ??
+          [],
+      error: json['error'] as String?,
+    );
+  }
 }

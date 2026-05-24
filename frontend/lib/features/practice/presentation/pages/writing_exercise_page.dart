@@ -41,6 +41,10 @@ class _WritingExercisePageState extends State<WritingExercisePage>
   bool hasSubmitted = false;
   int wordCount = 0;
   bool showRealTimeFeedback = false;
+  // 2026-05-25 — IELTS-aligned band scores from /writing/assess.
+  // Null until a submission comes back with them populated.
+  double? ieltsBand;
+  Map<String, double?>? ieltsBreakdown;
 
   @override
   void initState() {
@@ -654,6 +658,15 @@ class _WritingExercisePageState extends State<WritingExercisePage>
               ),
 
               const SizedBox(height: 20),
+
+              // IELTS Band Card (shown when backend returns ielts_band).
+              // 2026-05-25 — finding #6 from the audit: surfaces the
+              // IELTS-aligned 0-9 band score + per-criterion breakdown
+              // alongside the existing 0-100 score tiles.
+              if (ieltsBand != null) ...[
+                _buildIeltsBandCard(),
+                const SizedBox(height: 20),
+              ],
 
               // Scores Grid
               GridView.count(
@@ -1364,6 +1377,9 @@ class _WritingExercisePageState extends State<WritingExercisePage>
       vocabularySuggestions = result.vocabularySuggestions;
       nextSteps = result.nextSteps;
       correctedVersion = result.correctedVersion;
+      // 2026-05-25 — IELTS band (overall + per-criterion) if present
+      ieltsBand = result.ieltsBand;
+      ieltsBreakdown = result.ieltsBreakdown;
     });
 
     // Calculate overall score
@@ -1400,6 +1416,8 @@ class _WritingExercisePageState extends State<WritingExercisePage>
       vocabularySuggestions.clear();
       nextSteps.clear();
       correctedVersion = null;
+      ieltsBand = null;
+      ieltsBreakdown = null;
     });
 
     _writingFocusNode.requestFocus();
@@ -1548,6 +1566,143 @@ class _WritingExercisePageState extends State<WritingExercisePage>
     if (score >= 85) return Colors.green;
     if (score >= 70) return Colors.orange;
     return Colors.red;
+  }
+
+  // 2026-05-25 — IELTS band display helpers (finding #6).
+  Color _getBandColor(double band) {
+    if (band >= 7.0) return Colors.green;
+    if (band >= 5.5) return Colors.orange;
+    return Colors.red;
+  }
+
+  String _formatBand(double? band) {
+    if (band == null) return '–';
+    if (band == band.roundToDouble()) return band.toStringAsFixed(1);
+    return band.toStringAsFixed(1);
+  }
+
+  String _bandLabel(double band) {
+    if (band >= 8.5) return 'Expert';
+    if (band >= 7.0) return 'Good';
+    if (band >= 6.0) return 'Competent';
+    if (band >= 5.0) return 'Modest';
+    if (band >= 4.0) return 'Limited';
+    return 'Beginner';
+  }
+
+  Widget _buildIeltsBandCard() {
+    final overall = ieltsBand!;
+    final overallColor = _getBandColor(overall);
+    final breakdown = ieltsBreakdown ?? const <String, double?>{};
+    final criteriaLabels = const {
+      'task_response': 'Task Response',
+      'coherence_cohesion': 'Coherence',
+      'lexical_resource': 'Lexical',
+      'grammar_accuracy': 'Grammar',
+    };
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            overallColor.withValues(alpha: 0.18),
+            overallColor.withValues(alpha: 0.06),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: overallColor.withValues(alpha: 0.45), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.workspace_premium, color: overallColor, size: 22),
+              const SizedBox(width: 8),
+              const Text(
+                'IELTS Writing Band',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _formatBand(overall),
+                style: TextStyle(
+                  fontSize: 42,
+                  fontWeight: FontWeight.bold,
+                  color: overallColor,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '/ 9',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.grey[700],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  _bandLabel(overall),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: overallColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (breakdown.values.any((v) => v != null)) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: criteriaLabels.entries.map((kv) {
+                final band = breakdown[kv.key];
+                final c = band == null ? Colors.grey : _getBandColor(band);
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: c.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: c.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(
+                    '${kv.value}: ${_formatBand(band)}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: c,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   List<Color> _getMessageGradient(AITrainerMessageType type) {
