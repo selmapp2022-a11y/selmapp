@@ -436,6 +436,10 @@ class ElevenLabsTTSService:
         # from this dict (KeyError 'audio_data' was the bug observed in
         # production after the first deploy). Keep both names so any
         # downstream callers still find what they expect.
+        # Keep shape compatible with generate_audio_content's return so
+        # the gemini_tts_service caller can treat both interchangeably.
+        # KeyError 'duration_seconds' was the bug observed in production
+        # after the audio_data fix — the caller reads this field directly.
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
         return {
             "success": True,
@@ -444,10 +448,12 @@ class ElevenLabsTTSService:
             "audio_format": "mp3",
             "tts_engine": "elevenlabs",
             "tts_model": DEFAULT_MODEL_ID,
+            "voice_id": next(iter(voice_map.values()), DEFAULT_VOICE_ID),
             "speakers": [
                 {"name": n, "voice_id": v} for n, v in voice_map.items()
             ],
             "turn_count": len(turns),
+            "duration_seconds": None,
             "audio_data": audio_b64,
             "audio_data_base64": audio_b64,
         }
