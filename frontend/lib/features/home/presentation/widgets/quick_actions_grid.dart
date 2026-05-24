@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
+// 2026-05-25 — IELTS exam-prep entry points (findings #4 + #5).
+import '../../../practice/presentation/pages/ielts_writing_page.dart';
+import '../../../practice/presentation/pages/ielts_speaking_part3_page.dart';
 
 class QuickActionsGrid extends StatelessWidget {
   const QuickActionsGrid({super.key});
@@ -68,6 +71,31 @@ class QuickActionsGrid extends StatelessWidget {
           Icons.fitness_center,
           Colors.deepPurple,
           () => context.push('/practice'),
+        ),
+        // 2026-05-25 — IELTS exam-prep shortcuts.
+        _buildActionCard(
+          context,
+          'IELTS Writing',
+          'Task 1 + Task 2',
+          Icons.edit_note,
+          Colors.teal,
+          () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const IeltsWritingPage(),
+            ),
+          ),
+        ),
+        _buildActionCard(
+          context,
+          'IELTS Speaking',
+          'Part 3 discussion',
+          Icons.record_voice_over,
+          Colors.red.shade700,
+          () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const IeltsSpeakingPart3Page(),
+            ),
+          ),
         ),
       ],
     );
