@@ -30,6 +30,48 @@ import json
 router = APIRouter()
 ai_service = AIService()
 
+
+def _score_to_ielts_band(score_0_100: Optional[float]) -> Optional[float]:
+    """Map a 0-100 SELM/Gemini writing score onto an IELTS 0-9 band,
+    rounded to the nearest half-band as IELTS reports them.
+
+    The mapping is calibrated so that:
+      - 90+  → band 8.5-9
+      - 80   → band 7.5
+      - 70   → band 6.5
+      - 60   → band 5.5
+      - 50   → band 4.5
+      - 40   → band 3.5
+      - below 40 → bands 1-3
+
+    Used when the Gemini fallback path returns numeric scores and we
+    want to surface an IELTS-aligned band to the iPhone UI, matching
+    the SpeechAce premium path that returns the band natively.
+    (2026-05-25 — finding #6 from the 2026-05-24 audit.)
+    """
+    if score_0_100 is None:
+        return None
+    try:
+        s = max(0.0, min(100.0, float(score_0_100)))
+    except Exception:
+        return None
+    # 0-100 → 0-9 linear, then round to nearest 0.5
+    raw_band = (s / 100.0) * 9.0
+    rounded = round(raw_band * 2.0) / 2.0
+    return max(0.0, min(9.0, rounded))
+
+
+def _ielts_breakdown(scores: dict) -> dict:
+    """Return per-criterion IELTS band so the UI can render the four
+    standard IELTS Writing bands separately."""
+    return {
+        "task_response": _score_to_ielts_band(scores.get("task_achievement")),
+        "coherence_cohesion": _score_to_ielts_band(scores.get("coherence")),
+        "lexical_resource": _score_to_ielts_band(scores.get("vocabulary")),
+        "grammar_accuracy": _score_to_ielts_band(scores.get("grammar")),
+    }
+
+
 # Writing Prompt Endpoints
 @router.get("/prompts/", response_model=List[WritingPromptResponse])
 async def get_writing_prompts(
@@ -567,17 +609,27 @@ async def assess_writing_direct(
                     return None
 
             # Map SpeechAce 0-100 scale into the same fields the UI expects.
+            sa_scores = {
+                "overall": int(_f(sa_score, "overall") or 0),
+                "grammar": int(_f(sa_score, "grammar") or 0),
+                "vocabulary": int(_f(sa_score, "vocab") or 0),
+                "coherence": int(_f(sa_score, "coherence") or 0),
+                "task_achievement": int(_f(sa_score, "relevance") or 0),
+            }
+            sa_ielts_breakdown = {
+                # Prefer SpeechAce's own per-criterion IELTS bands when
+                # available, otherwise derive them from the 0-100 scores.
+                "task_response": _f(ielts, "relevance") or _score_to_ielts_band(sa_scores["task_achievement"]),
+                "coherence_cohesion": _f(ielts, "coherence") or _score_to_ielts_band(sa_scores["coherence"]),
+                "lexical_resource": _f(ielts, "vocab") or _score_to_ielts_band(sa_scores["vocabulary"]),
+                "grammar_accuracy": _f(ielts, "grammar") or _score_to_ielts_band(sa_scores["grammar"]),
+            }
             return {
                 "success": True,
                 "assessment": {
-                    "scores": {
-                        "overall": int(_f(sa_score, "overall") or 0),
-                        "grammar": int(_f(sa_score, "grammar") or 0),
-                        "vocabulary": int(_f(sa_score, "vocab") or 0),
-                        "coherence": int(_f(sa_score, "coherence") or 0),
-                        "task_achievement": int(_f(sa_score, "relevance") or 0),
-                    },
-                    "ielts_band": _f(ielts, "overall"),
+                    "scores": sa_scores,
+                    "ielts_band": _f(ielts, "overall") or _score_to_ielts_band(sa_scores["overall"]),
+                    "ielts_breakdown": sa_ielts_breakdown,
                     "feedback": ts.get("feedback_text") or "Detailed scores from SpeechAce. Review the highlights below.",
                     "strengths": ts.get("strengths") or [],
                     "weaknesses": ts.get("weaknesses") or [],
@@ -607,17 +659,19 @@ async def assess_writing_direct(
         
         if ai_result.get('success'):
             assessment = ai_result.get('content', {})
-            
+            gemini_scores = {
+                "overall": assessment.get('overall_score', 70),
+                "grammar": assessment.get('grammar_score', 70),
+                "vocabulary": assessment.get('vocabulary_score', 70),
+                "coherence": assessment.get('coherence_score', 70),
+                "task_achievement": assessment.get('task_achievement_score', 70),
+            }
             return {
                 "success": True,
                 "assessment": {
-                    "scores": {
-                        "overall": assessment.get('overall_score', 70),
-                        "grammar": assessment.get('grammar_score', 70),
-                        "vocabulary": assessment.get('vocabulary_score', 70),
-                        "coherence": assessment.get('coherence_score', 70),
-                        "task_achievement": assessment.get('task_achievement_score', 70)
-                    },
+                    "scores": gemini_scores,
+                    "ielts_band": _score_to_ielts_band(gemini_scores["overall"]),
+                    "ielts_breakdown": _ielts_breakdown(gemini_scores),
                     "feedback": assessment.get('feedback', 'Good effort! Keep practicing.'),
                     "strengths": assessment.get('strengths', []),
                     "weaknesses": assessment.get('weaknesses', []),
@@ -632,21 +686,22 @@ async def assess_writing_direct(
                     "word_count": len(text.split()),
                     "character_count": len(text),
                     "writing_type": writing_type,
-                    "user_level": level
+                    "user_level": level,
+                    "scorer": "gemini"
                 }
             }
         else:
             # Fallback response
+            fb_scores = {
+                "overall": 70, "grammar": 70, "vocabulary": 70,
+                "coherence": 70, "task_achievement": 70,
+            }
             return {
                 "success": True,
                 "assessment": {
-                    "scores": {
-                        "overall": 70,
-                        "grammar": 70,
-                        "vocabulary": 70,
-                        "coherence": 70,
-                        "task_achievement": 70
-                    },
+                    "scores": fb_scores,
+                    "ielts_band": _score_to_ielts_band(fb_scores["overall"]),
+                    "ielts_breakdown": _ielts_breakdown(fb_scores),
                     "feedback": "Your writing shows good effort. Continue practicing to improve your skills.",
                     "strengths": ["Good attempt at expressing ideas"],
                     "weaknesses": [],
@@ -664,22 +719,23 @@ async def assess_writing_direct(
                     "word_count": len(text.split()),
                     "character_count": len(text),
                     "writing_type": writing_type,
-                    "user_level": level
+                    "user_level": level,
+                    "scorer": "fallback"
                 }
             }
             
     except Exception as e:
+        ex_scores = {
+            "overall": 70, "grammar": 70, "vocabulary": 70,
+            "coherence": 70, "task_achievement": 70,
+        }
         return {
             "success": False,
             "error": str(e),
             "assessment": {
-                "scores": {
-                    "overall": 70,
-                    "grammar": 70,
-                    "vocabulary": 70,
-                    "coherence": 70,
-                    "task_achievement": 70
-                },
+                "scores": ex_scores,
+                "ielts_band": _score_to_ielts_band(ex_scores["overall"]),
+                "ielts_breakdown": _ielts_breakdown(ex_scores),
                 "feedback": "Your writing has been received. Keep practicing!",
                 "strengths": [],
                 "weaknesses": [],
@@ -694,7 +750,8 @@ async def assess_writing_direct(
                 "word_count": len(text.split()),
                 "character_count": len(text),
                 "writing_type": writing_type,
-                "user_level": user_level or "B1"
+                "user_level": user_level or "B1",
+                "scorer": "error_fallback"
             }
         }
 
