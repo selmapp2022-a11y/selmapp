@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
+import base64
 import logging
 import re
 import uuid
@@ -570,11 +571,20 @@ async def _render_listening_dialogue_audio(transcript: str) -> str:
         f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_"
         f"{uuid.uuid4().hex[:8]}.mp3"
     )
+    # AudioStorageService.store_audio expects ``audio_data`` as a
+    # base64-encoded string (see the service definition), not raw
+    # bytes — and there's no content_type kwarg. Discovered via the
+    # production log message "got an unexpected keyword argument
+    # 'audio_bytes'" (2026-05-23).
     try:
         stored = await audio_storage_service.store_audio(
+            audio_data=base64.b64encode(audio_bytes).decode("ascii"),
             filename=filename,
-            audio_bytes=audio_bytes,
-            content_type="audio/mpeg",
+            metadata={
+                "source": "listening_fallback_multivoice",
+                "format": "mp3",
+                "turn_count": len(chunks),
+            },
         )
     except Exception as e:
         logger.warning("Failed to persist listening multi-voice audio: %s", e)
