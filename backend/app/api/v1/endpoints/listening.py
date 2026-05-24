@@ -453,14 +453,16 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
 
     2026-05-13 minimal fix — was returning a hardcoded one-line
     template ("Hello! Today we talk about X. It is very interesting.
-    Let's learn together!") for every level, which meant every user
-    whose listening generation fell back hit the same eight words.
-    Now we ask Gemini for a real short dialogue. If Gemini itself is
-    unreachable we degrade to a still-templated transcript so the
-    endpoint never crashes — but in normal operation the user sees
-    fresh, varied content.
+    Let's learn together!") AND hardcoded comprehension questions
+    ("What is the main topic of this conversation?" with options
+    [topic, Weather, Sports, Food]) for every level, which meant every
+    user whose listening generation fell back saw identical tests.
+    Now we ask Gemini for the dialogue AND the comprehension questions
+    in one JSON response. Hardcoded transcript + questions remain ONLY
+    as last-resort safety net for when Gemini itself is unreachable.
     """
     transcript = ""
+    gemini_questions: List[Dict[str, Any]] = []
     try:
         from app.services.ai_service import ai_service
         if ai_service.gemini_model:
@@ -475,27 +477,62 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
                 "C2": "320-400 words",
             }.get(level, "130-180 words")
             prompt = (
-                f"Write a short multi-speaker {content_type} for English "
-                f"learners about \"{topic}\". Length: {length_by_level}. "
-                f"Level: CEFR {level}. Use TWO speakers with distinct "
-                f"names. Format every line exactly as 'Name: line of "
-                f"dialogue.' on its own line. Each speaker must speak at "
-                f"least twice — do not write a monologue. Make the "
-                f"content concrete and engaging, not generic textbook "
-                f"phrasing. Reply ONLY with the dialogue lines, no JSON, "
-                f"no preamble, no extra commentary."
+                f"Generate listening-practice content for an English "
+                f"learner. Topic: \"{topic}\". CEFR level: {level}. "
+                f"Content type: {content_type}. Length: {length_by_level}.\n\n"
+                "Produce: (a) a multi-speaker dialogue with TWO speakers "
+                "with distinct names — each must speak at least twice, "
+                "no monologue — and (b) 3-4 comprehension questions "
+                "(mix main-idea, detail, and inference). Each question "
+                "needs four plausible options where the wrong ones are "
+                "defensible misreads, NOT 'Weather/Sports/Food/History/"
+                "Science/Art' placeholders.\n\n"
+                "Reply ONLY with valid JSON of this exact shape:\n"
+                "{\n"
+                '  "transcript": "Name: line.\\nName: line.\\n...",\n'
+                '  "questions": [\n'
+                '    {\n'
+                '      "question": "...",\n'
+                '      "options": ["A", "B", "C", "D"],\n'
+                '      "correct_answer": "the correct option (verbatim)",\n'
+                '      "explanation": "Why it is correct, with reference to the dialogue."\n'
+                '    }\n'
+                "  ]\n"
+                "}"
             )
             resp = await _asyncio.wait_for(
                 _asyncio.to_thread(ai_service.gemini_model.generate_content, prompt),
                 timeout=30.0,
             )
-            transcript = (getattr(resp, "text", "") or "").strip()
-            if transcript.startswith("```"):
-                transcript = transcript.split("\n", 1)[1] if "\n" in transcript else transcript
-                transcript = transcript.rsplit("```", 1)[0].strip()
+            raw = (getattr(resp, "text", "") or "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+                raw = raw.rsplit("```", 1)[0].strip()
+            try:
+                data = _json.loads(raw)
+            except Exception:
+                import re as _re
+                m = _re.search(r"\{[\s\S]*\}", raw)
+                data = _json.loads(m.group(0)) if m else {}
+            transcript = (data.get("transcript") or "").strip()
+            for i, q in enumerate((data.get("questions") or [])[:4]):
+                if not isinstance(q, dict):
+                    continue
+                question_text = (q.get("question") or "").strip()
+                options = q.get("options") or []
+                correct = q.get("correct_answer") or ""
+                if not question_text or not options or not correct:
+                    continue
+                gemini_questions.append({
+                    "id": f"q_{i}",
+                    "question": question_text,
+                    "options": [str(o) for o in options][:4],
+                    "correct_answer": str(correct),
+                    "explanation": str(q.get("explanation") or ""),
+                })
     except Exception as e:
         logger.warning(
-            "Gemini fallback transcript generation failed for topic=%s level=%s: %s",
+            "Gemini fallback listening generation failed for topic=%s level=%s: %s",
             topic, level, e,
         )
 
@@ -507,7 +544,27 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
             f"Listening content for {topic} is temporarily unavailable. "
             "Please try again in a moment."
         )
-    
+
+    # Fall back to the old templated questions ONLY if Gemini didn't
+    # supply any. In normal operation `gemini_questions` is non-empty
+    # and these are unused.
+    questions = gemini_questions if gemini_questions else [
+        {
+            "id": "q_0",
+            "question": f"What is the main topic of this {content_type}?",
+            "options": [topic, "Weather", "Sports", "Food"],
+            "correct_answer": topic,
+            "explanation": f"The {content_type} is about {topic}.",
+        },
+        {
+            "id": "q_1",
+            "question": "What can you learn from this?",
+            "options": ["New vocabulary", "History", "Science", "Art"],
+            "correct_answer": "New vocabulary",
+            "explanation": "This listening exercise helps you learn new vocabulary.",
+        },
+    ]
+
     return {
         "success": True,
         "exercise": {
@@ -518,22 +575,7 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
             "audio_url": "",  # No audio available
             "transcript": transcript,
             "duration_seconds": 60,
-            "questions": [
-                {
-                    "id": "q_0",
-                    "question": f"What is the main topic of this {content_type}?",
-                    "options": [topic, "Weather", "Sports", "Food"],
-                    "correct_answer": topic,
-                    "explanation": f"The {content_type} is about {topic}."
-                },
-                {
-                    "id": "q_1",
-                    "question": "What can you learn from this?",
-                    "options": ["New vocabulary", "History", "Science", "Art"],
-                    "correct_answer": "New vocabulary",
-                    "explanation": "This listening exercise helps you learn new vocabulary."
-                }
-            ],
+            "questions": questions,
             "vocabulary": [
                 {"word": "interesting", "definition": "something that captures attention"},
                 {"word": "learn", "definition": "to gain knowledge"}
