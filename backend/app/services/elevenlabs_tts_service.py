@@ -165,11 +165,22 @@ class ElevenLabsTTSService:
             }
 
         # Persist + return matching GeminiTTSService shape.
+        # 2026-05-23: AudioStorageService.store_audio expects
+        # ``audio_data`` as a base64-encoded string, not raw
+        # ``audio_bytes`` — the original code crashed with
+        # "got an unexpected keyword argument 'audio_bytes'" on
+        # every ElevenLabs TTS call. Same pattern applied to
+        # ``generate_listening_content`` below.
         try:
             stored = await audio_storage_service.store_audio(
+                audio_data=base64.b64encode(audio_bytes).decode("ascii"),
                 filename=filename,
-                audio_bytes=audio_bytes,
-                content_type="audio/mpeg",
+                metadata={
+                    "source": "elevenlabs",
+                    "format": "mp3",
+                    "voice_id": voice_id,
+                    "model_id": model_id,
+                },
             )
         except Exception as e:
             logger.exception("Failed to persist ElevenLabs audio")
@@ -302,10 +313,16 @@ class ElevenLabsTTSService:
         unique_id = uuid.uuid4().hex[:8]
         filename = f"listening_{timestamp}_{unique_id}.mp3"
         try:
+            # Same store_audio signature fix as above — pass base64
+            # audio_data, not raw audio_bytes (2026-05-23).
             stored = await audio_storage_service.store_audio(
+                audio_data=base64.b64encode(audio_bytes).decode("ascii"),
                 filename=filename,
-                audio_bytes=audio_bytes,
-                content_type="audio/mpeg",
+                metadata={
+                    "source": "elevenlabs_multi_voice",
+                    "format": "mp3",
+                    "speakers": len(speakers_meta),
+                },
             )
         except Exception as e:
             logger.exception("Failed to persist multi-voice listening audio")
@@ -340,6 +357,93 @@ class ElevenLabsTTSService:
                 "api": "elevenlabs",
                 "multi_voice": True,
             },
+        }
+
+    async def generate_multi_speaker_audio(
+        self,
+        turns: List[Dict[str, str]],
+        audio_type: str = "conversation",
+        accent: Optional[str] = None,
+        voice_settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Render a multi-speaker dialogue as a single multi-voice MP3.
+
+        2026-05-23: this method existed only as a CALL in
+        ``gemini_tts_service.generate_listening_content`` — the
+        attribute itself was never implemented, so every call hit
+        ``AttributeError`` and the listening pipeline silently fell
+        back to single-voice. iPhone testers reported "one voice
+        reading both speakers" for months as a result.
+
+        Takes ``turns`` as a list of ``{"speaker": <name>, "text":
+        <line>}`` dicts. Builds a per-speaker voice map via the
+        existing :meth:`_build_speaker_voice_map` (gender-matched
+        when possible, round-robin otherwise), renders each turn
+        through the existing :meth:`_render_dialogue_via_legacy`,
+        persists the concatenated MP3 via the audio storage
+        service, and returns the same response shape as
+        :meth:`generate_audio_content` so the caller in
+        ``gemini_tts_service`` can swap providers transparently.
+        """
+        del audio_type, accent, voice_settings  # accepted for API parity
+        if not self.api_key:
+            return {"success": False, "error": "ELEVENLABS_API_KEY not configured"}
+        if not turns:
+            return {"success": False, "error": "no turns to synthesise"}
+
+        # Build a speakers_meta list so _build_speaker_voice_map can
+        # use its full logic (gender hints + name heuristics + round
+        # robin). The caller in gemini_tts_service passes turns with
+        # an optional "gender" hint on each turn — we deduplicate by
+        # speaker name and keep the first gender we see.
+        seen: Dict[str, Dict[str, Any]] = {}
+        for t in turns:
+            name = (t.get("speaker") or "").strip()
+            if not name:
+                continue
+            if name not in seen:
+                seen[name] = {"name": name, "gender": t.get("gender") or ""}
+        speakers_meta = list(seen.values())
+        voice_map = self._build_speaker_voice_map(speakers_meta, "")
+
+        audio_bytes = await self._render_dialogue_via_legacy(turns, voice_map)
+        if not audio_bytes:
+            return {
+                "success": False,
+                "error": "per-turn ElevenLabs synthesis returned no audio",
+            }
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = (
+            f"multi_speaker_{timestamp}_{uuid.uuid4().hex[:8]}.mp3"
+        )
+        try:
+            stored = await audio_storage_service.store_audio(
+                audio_data=base64.b64encode(audio_bytes).decode("ascii"),
+                filename=filename,
+                metadata={
+                    "source": "elevenlabs_multi_speaker",
+                    "format": "mp3",
+                    "speaker_count": len(seen),
+                    "turn_count": len(turns),
+                },
+            )
+        except Exception as e:
+            logger.exception("Failed to persist multi-speaker audio")
+            return {"success": False, "error": f"Storage error: {e}"}
+
+        return {
+            "success": True,
+            "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
+            "filename": filename,
+            "audio_format": "mp3",
+            "tts_engine": "elevenlabs",
+            "tts_model": DEFAULT_MODEL_ID,
+            "speakers": [
+                {"name": n, "voice_id": v} for n, v in voice_map.items()
+            ],
+            "turn_count": len(turns),
+            "audio_data_base64": base64.b64encode(audio_bytes).decode("ascii"),
         }
 
     async def _render_dialogue_via_legacy(
