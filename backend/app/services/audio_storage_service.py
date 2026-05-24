@@ -71,8 +71,31 @@ class AudioStorageService:
             # Decode audio once
             audio_bytes = base64.b64decode(audio_data)
             file_size = len(audio_bytes)
-            # Enforce .wav extension
-            safe_name = filename if filename.lower().endswith(".wav") else f"{filename}.wav"
+            # Preserve the caller's filename if it already has a known
+            # audio extension (mp3/m4a/aac/ogg/wav). Previous behaviour
+            # blindly appended ``.wav`` which produced files like
+            # ``multi_speaker_…mp3.wav`` whose actual bytes were MP3 —
+            # iOS just_audio refused to play them. Map extension →
+            # content-type so the upload headers also match the bytes.
+            # (2026-05-24 fix.)
+            _EXT_TO_MIME = {
+                ".mp3": "audio/mpeg",
+                ".m4a": "audio/mp4",
+                ".aac": "audio/aac",
+                ".ogg": "audio/ogg",
+                ".wav": "audio/wav",
+            }
+            _lower = filename.lower()
+            matched_ext = next(
+                (ext for ext in _EXT_TO_MIME if _lower.endswith(ext)),
+                None,
+            )
+            if matched_ext:
+                safe_name = filename
+                audio_mime = _EXT_TO_MIME[matched_ext]
+            else:
+                safe_name = f"{filename}.wav"
+                audio_mime = "audio/wav"
 
             # DigitalOcean Spaces storage mode
             if self.storage_mode == "spaces":
@@ -94,11 +117,13 @@ class AudioStorageService:
                     else:
                         destination_path = f"audio/tts/{safe_name}"
                     
-                    # Upload to Spaces
+                    # Upload to Spaces. Use content-type that matches
+                    # the actual bytes (mp3/m4a/wav/…) — not a hardcoded
+                    # ``audio/wav`` which broke iOS playback.
                     public_url = spaces_service.upload_file(
                         file_content=audio_bytes,
                         destination_path=destination_path,
-                        content_type="audio/wav"
+                        content_type=audio_mime,
                     )
                     
                     if public_url:
@@ -124,9 +149,14 @@ class AudioStorageService:
                 with open(full_path, "wb") as f:
                     f.write(audio_bytes)
 
-                # Serve via FastAPI endpoint /api/v1/ai/audio/{filename} which reads
-                # back from this same filesystem mount. Build absolute URL for mobile.
-                audio_url = f"{self.public_base}/api/v1/ai/audio/{safe_name}"
+                # URL resolves via FastAPI static mount; build absolute URL for mobile clients
+                if self.base_url.startswith("http://") or self.base_url.startswith("https://"):
+                    base = self.base_url.rstrip("/")
+                    audio_url = f"{base}/tts/{safe_name}"
+                else:
+                    # base_url is a path like /media/audio → prefix public base
+                    path = self.base_url.rstrip("/")
+                    audio_url = f"{self.public_base}{path}/tts/{safe_name}"
                 return {
                     "success": True,
                     "audio_url": audio_url,
