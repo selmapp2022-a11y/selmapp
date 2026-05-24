@@ -432,6 +432,11 @@ class ElevenLabsTTSService:
             logger.exception("Failed to persist multi-speaker audio")
             return {"success": False, "error": f"Storage error: {e}"}
 
+        # The gemini_tts_service caller reads ``audio_data`` directly
+        # from this dict (KeyError 'audio_data' was the bug observed in
+        # production after the first deploy). Keep both names so any
+        # downstream callers still find what they expect.
+        audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
         return {
             "success": True,
             "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
@@ -443,7 +448,8 @@ class ElevenLabsTTSService:
                 {"name": n, "voice_id": v} for n, v in voice_map.items()
             ],
             "turn_count": len(turns),
-            "audio_data_base64": base64.b64encode(audio_bytes).decode("ascii"),
+            "audio_data": audio_b64,
+            "audio_data_base64": audio_b64,
         }
 
     async def _render_dialogue_via_legacy(
