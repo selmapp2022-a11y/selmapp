@@ -102,115 +102,177 @@ class EmailService:
         """
         # Build reset URL - this should point to your frontend
         reset_url = f"{settings.PUBLIC_BASE_URL}/reset-password?token={reset_token}"
-        
+
         greeting = f"Hi {user_name}," if user_name else "Hi,"
-        
+
+        # Brand v1.0 (2026) palette:
+        #   Navy primary  = #183048
+        #   Teal accent   = #5EEAD4
+        #   Ink secondary = #4A5568
+        # Logo is rendered with pure HTML/CSS (rounded Navy square + white "S"
+        # initial + "SELM" wordmark) instead of an image so it survives email
+        # clients that block remote images by default. This matches the
+        # selmapp.ca / selmapp.com lockup.
         html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reset Your Password</title>
+    <title>Reset Your SELM Password</title>
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
-            color: #333;
+            color: #1A202C;
             max-width: 600px;
             margin: 0 auto;
             padding: 20px;
+            background-color: #FFFFFF;
         }}
         .header {{
             text-align: center;
-            padding: 20px 0;
-            border-bottom: 2px solid #4F46E5;
+            padding: 28px 0 20px;
+            border-bottom: 2px solid #183048;
         }}
-        .logo {{
-            font-size: 28px;
-            font-weight: bold;
-            color: #4F46E5;
+        .logo-lockup {{
+            display: inline-block;
+            text-align: left;
+            line-height: 1;
+        }}
+        .logo-row {{
+            display: inline-block;
+            vertical-align: middle;
+        }}
+        .logo-symbol {{
+            display: inline-block;
+            vertical-align: middle;
+            width: 56px;
+            height: 56px;
+            background-color: #183048;
+            border-radius: 14px;
+            color: #FFFFFF;
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 36px;
+            font-weight: 700;
+            line-height: 56px;
+            text-align: center;
+            margin-right: 14px;
+        }}
+        .logo-text {{
+            display: inline-block;
+            vertical-align: middle;
+        }}
+        .logo-wordmark {{
+            font-size: 26px;
+            font-weight: 800;
+            color: #183048;
+            letter-spacing: 0.5px;
+            line-height: 1;
+        }}
+        .logo-tagline {{
+            font-size: 11px;
+            color: #5EEAD4;
+            letter-spacing: 2px;
+            margin-top: 4px;
+            font-weight: 600;
         }}
         .content {{
-            padding: 30px 0;
+            padding: 30px 4px;
+            color: #1A202C;
         }}
         .button {{
             display: inline-block;
-            background-color: #4F46E5;
-            color: white !important;
+            background-color: #183048;
+            color: #FFFFFF !important;
             text-decoration: none;
             padding: 14px 28px;
-            border-radius: 8px;
+            border-radius: 10px;
             font-weight: 600;
             margin: 20px 0;
         }}
         .button:hover {{
-            background-color: #4338CA;
+            background-color: #0F1F30;
+        }}
+        .link-text {{
+            word-break: break-all;
+            color: #183048;
         }}
         .footer {{
             padding-top: 20px;
-            border-top: 1px solid #eee;
-            font-size: 14px;
-            color: #666;
+            border-top: 1px solid #E2E8F0;
+            font-size: 13px;
+            color: #718096;
         }}
         .warning {{
-            background-color: #FEF3C7;
-            border-left: 4px solid #F59E0B;
-            padding: 12px;
-            margin: 20px 0;
+            background-color: #F0FDFA;
+            border-left: 4px solid #5EEAD4;
+            padding: 12px 16px;
+            margin: 24px 0;
+            border-radius: 4px;
+            color: #134E4A;
         }}
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="logo">SelmApp</div>
-    </div>
-    
-    <div class="content">
-        <p>{greeting}</p>
-        
-        <p>We received a request to reset your password for your SelmApp account. Click the button below to create a new password:</p>
-        
-        <p style="text-align: center;">
-            <a href="{reset_url}" class="button">Reset Password</a>
-        </p>
-        
-        <p>Or copy and paste this link into your browser:</p>
-        <p style="word-break: break-all; color: #4F46E5;">{reset_url}</p>
-        
-        <div class="warning">
-            <strong>This link will expire in 1 hour.</strong><br>
-            If you didn't request a password reset, you can safely ignore this email.
+        <div class="logo-lockup">
+            <div class="logo-row">
+                <span class="logo-symbol">S</span>
+                <span class="logo-text">
+                    <div class="logo-wordmark">SELM</div>
+                    <div class="logo-tagline">ENGLISH, SIMPLY</div>
+                </span>
+            </div>
         </div>
     </div>
-    
+
+    <div class="content">
+        <p>{greeting}</p>
+
+        <p>We received a request to reset the password on your SELM account. Click the button below to choose a new password:</p>
+
+        <p style="text-align: center;">
+            <a href="{reset_url}" class="button">Reset password</a>
+        </p>
+
+        <p>Or copy and paste this link into your browser:</p>
+        <p class="link-text">{reset_url}</p>
+
+        <div class="warning">
+            <strong>This link will expire in 1 hour.</strong><br>
+            If you didn't request a password reset, you can safely ignore this email — your password won't change.
+        </div>
+    </div>
+
     <div class="footer">
-        <p>This email was sent by SelmApp. If you have any questions, please contact our support team.</p>
-        <p>&copy; {settings.PROJECT_NAME}. All rights reserved.</p>
+        <p>This message was sent by SELM. Questions? Reply to this email or visit <a href="https://selmapp.ca" style="color:#183048;">selmapp.ca</a>.</p>
+        <p>&copy; SELM — English, simply.</p>
     </div>
 </body>
 </html>
 """
-        
+
         text_content = f"""
 {greeting}
 
-We received a request to reset your password for your SelmApp account.
+We received a request to reset the password on your SELM account.
 
-Click the link below to create a new password:
+Click the link below to choose a new password:
 {reset_url}
 
 This link will expire in 1 hour.
 
-If you didn't request a password reset, you can safely ignore this email.
+If you didn't request a password reset, you can safely ignore this email — your password won't change.
 
 ---
-This email was sent by SelmApp.
+SELM — English, simply.
+https://selmapp.ca
 """
-        
+
         return await self.send_email(
             to_email=to_email,
-            subject="Reset Your SelmApp Password",
+            subject="Reset your SELM password",
             html_content=html_content,
             text_content=text_content
         )
