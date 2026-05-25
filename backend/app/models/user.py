@@ -20,7 +20,6 @@ class OAuthProvider(str, enum.Enum):
     GOOGLE = "google"
     GITHUB = "github"
     FACEBOOK = "facebook"
-    APPLE = "apple"
 
 class OAuth2Account(Base):
     __tablename__ = "oauth2_accounts"
@@ -59,7 +58,10 @@ class User(Base):
     
     # Profile information
     current_level = Column(Enum(UserLevel), default=UserLevel.A1)
-    native_language = Column(String(50), default="Persian")
+    # native_language is NULL by default — SELM is global and we do not
+    # presume a learner's L1. If the user sets it later we use it as a
+    # hint for L1-interference patterns; otherwise prompts stay neutral.
+    native_language = Column(String(50), nullable=True, default=None)
     target_language = Column(String(50), default="English")
     
     # Account status

@@ -15,10 +15,29 @@ logger = logging.getLogger(__name__)
 
 class AIReadingService:
     def __init__(self):
-        # Configure Google Gemini
+        # 2026-05-13: upgraded from FAST (flash-lite) to CONTENT (pro)
+        # because reading passages are the highest-stakes prose the app
+        # produces — quality at multi-paragraph scale matters far more
+        # than per-call latency here. Falls back to FAST on init error.
         if settings.GOOGLE_GEMINI_API_KEY:
             genai.configure(api_key=settings.GOOGLE_GEMINI_API_KEY)
-            self.gemini_model = genai.GenerativeModel(settings.GEMINI_TEXT_MODEL_FAST)
+            content_name = getattr(
+                settings, "GEMINI_TEXT_MODEL_CONTENT", None
+            ) or getattr(settings, "GEMINI_TEXT_MODEL_FAST", "gemini-2.5-flash-lite")
+            try:
+                self.gemini_model = genai.GenerativeModel(content_name)
+                logger.info(
+                    "AIReadingService using Gemini model: %s", content_name
+                )
+            except Exception as e:
+                fallback = getattr(
+                    settings, "GEMINI_TEXT_MODEL_FAST", "gemini-2.5-flash-lite"
+                )
+                logger.warning(
+                    "Failed to init %s for reading, falling back to %s: %s",
+                    content_name, fallback, e,
+                )
+                self.gemini_model = genai.GenerativeModel(fallback)
         else:
             self.gemini_model = None
             logger.warning("Google Gemini API key not configured")
@@ -91,9 +110,15 @@ class AIReadingService:
                 "example": vocab.example_sentence
             })
 
+        # Build the creative seed once at this level so we can
+        # (a) hand it down to the generator for prompt diversity, and
+        # (b) surface the chosen voice_category to the audio step.
+        from app.services.prompt_library import creative_seed
+        seed = creative_seed(text_type.value)
+
         # Generate the reading text
         text_content = await self._generate_text_content(
-            level, text_type, topic, word_count, vocab_list
+            level, text_type, topic, word_count, vocab_list, seed=seed
         )
 
         result = {
@@ -102,7 +127,10 @@ class AIReadingService:
             "level": level.value,
             "text_type": text_type.value,
             "topic": topic,
-            "word_count": len(text_content.split()) if text_content else 0
+            "word_count": len(text_content.split()) if text_content else 0,
+            # Voice hint for the TTS layer — pass into
+            # `tts.generate_audio_content(speaker_config=[{"voice_category": ...}])`
+            "voice_category": seed.get("voice_category"),
         }
 
         # Generate comprehension questions if requested
@@ -126,18 +154,45 @@ class AIReadingService:
         """
         if not self.gemini_model:
             return []
-        prompt = f"""You are an English teacher. From the following passage, pick the {count} most useful vocabulary words for a {level.value} learner. Prefer words that actually appear in the text and would help a learner unlock its meaning.
+        from app.services.prompt_library import cefr_block
 
-PASSAGE:
+        prompt = f"""You are an English-language tutor. From the passage
+below, pick exactly {count} vocabulary items that genuinely repay
+study at this learner's level. Prefer words that:
+  • actually appear in the text,
+  • help unlock the meaning of the passage,
+  • are useful beyond this single passage (high-utility, not one-off
+    names/places),
+  • match the level spec below — skip items that are obviously below
+    level (likely already known) or far above level (unhelpful here).
+
+{cefr_block(level.value)}
+
+PASSAGE
 \"\"\"
 {text}
 \"\"\"
 
-Return ONLY a valid JSON array (no markdown):
+For each item return:
+  • "word"            — surface form as it appears (lemmatised if a
+                         common inflection).
+  • "definition"      — short, learner-friendly, calibrated to level.
+  • "part_of_speech"  — noun|verb|adj|adv|phrasal_verb|idiom.
+  • "example"         — a NEW sentence (not the passage line) using
+                         the word in a clear, concrete situation.
+  • "in_text_line"    — the exact line from the passage where the
+                         learner can see it in context.
+
+Return ONLY a valid JSON array (no markdown fences):
 [
-  {{"word": "...", "definition": "short learner-friendly definition", "part_of_speech": "noun|verb|adj|adv", "example": "an example sentence using the word"}}
-]
-"""
+  {{
+    "word": "...",
+    "definition": "...",
+    "part_of_speech": "...",
+    "example": "...",
+    "in_text_line": "..."
+  }}
+]"""
         try:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, self.gemini_model.generate_content, prompt)
@@ -154,6 +209,9 @@ Return ONLY a valid JSON array (no markdown):
                         "definition": str(d.get("definition", "")).strip(),
                         "part_of_speech": str(d.get("part_of_speech", "")).strip(),
                         "example": str(d.get("example", "")).strip(),
+                        # New: where the word lives in the passage. Frontend
+                        # can use this to highlight the in-context line.
+                        "in_text_line": str(d.get("in_text_line", "")).strip(),
                     }
                     for d in data if isinstance(d, dict) and d.get("word")
                 ]
@@ -197,129 +255,139 @@ Return ONLY a valid JSON array (no markdown):
         text_type: ReadingTextType,
         topic: str,
         word_count: int,
-        vocabulary_list: List[Dict[str, Any]]
+        vocabulary_list: List[Dict[str, Any]],
+        seed: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Generate the actual reading text content - produces meaningful, comprehensive passages"""
-        
+        """Generate the actual reading text content - produces meaningful, comprehensive passages.
+
+        2026-05-13: every call now pulls a fresh creative_seed() so two
+        requests for the same topic + level produce genuinely different
+        texts (different scene, opening hook, perspective, tone, shape),
+        not just different vocabulary stuffed into the same skeleton.
+
+        ``seed`` may be provided by the caller (so the caller can also
+        access voice_category, protagonist, etc.); if None we build one
+        here for backwards compatibility with older call sites.
+        """
+        from app.services.prompt_library import (
+            cefr_block,
+            creative_seed,
+            render_creative_brief,
+            HUMAN_VOICE_RULES,
+        )
+
+        # Fresh randomized creative angle for THIS generation. The seed
+        # is read by Gemini as part of the brief; we don't store it.
+        if seed is None:
+            seed = creative_seed(text_type.value if hasattr(text_type, "value") else str(text_type))
+        creative_brief = render_creative_brief(seed)
+
         # Create vocabulary context for the prompt
         vocab_context = "\n".join([
             f"- {item['word']} ({item['part_of_speech']}): {item['definition']}"
             for item in vocabulary_list
         ])
 
-        # Level-specific writing guidelines with detailed instructions
+        # Level-specific writing guidelines with detailed instructions.
+        #
+        # 2026-05-13: word targets bumped substantially across the board.
+        # The previous targets (A1=60, B1=180, C2=500) produced skimpy
+        # passages that the user flagged as too short. New targets give
+        # enough room for the creative_brief (scene → development →
+        # turn → resolution) to actually unfold. We also stopped capping
+        # the caller-provided ``word_count`` with ``max(word_count, X)``
+        # — the level floor now wins so practice sessions are
+        # substantive even when the caller's hint is small.
         level_guidelines = {
             DifficultyLevel.A1: {
-                "style": "Use very simple sentences (5-8 words), present tense only, basic vocabulary, short paragraphs (2-3 sentences each)",
-                "word_target": max(word_count, 60),
+                "style": "Short sentences (6-10 words), present simple + a little past simple, very common vocabulary, paragraphs of 2-3 sentences each",
+                "word_target": max(word_count, 120),
                 "sentence_length": "short",
-                "topics_hint": "everyday life, family, food, weather, simple descriptions"
+                "topics_hint": "everyday life, family, food, weather, simple descriptions",
             },
             DifficultyLevel.A2: {
-                "style": "Use simple sentences, present and past tense, familiar everyday topics, clear structure with transitions",
-                "word_target": max(word_count, 100),
+                "style": "Simple sentences, present and past tense, some future with 'will'/'going to', familiar everyday topics, clear connectives",
+                "word_target": max(word_count, 200),
                 "sentence_length": "simple",
-                "topics_hint": "daily routines, hobbies, travel basics, shopping"
+                "topics_hint": "daily routines, hobbies, travel basics, shopping, simple feelings",
             },
             DifficultyLevel.B1: {
-                "style": "Use varied sentence structures with some complex sentences, multiple tenses including present perfect, clear logical flow",
-                "word_target": max(word_count, 180),
+                "style": "Varied sentence structures with subordinate clauses, all common tenses including present perfect and second conditional, clear logical flow with discourse markers",
+                "word_target": max(word_count, 320),
                 "sentence_length": "medium",
-                "topics_hint": "work, education, health, environment, social issues"
+                "topics_hint": "work, education, health, environment, social issues, personal opinions",
             },
             DifficultyLevel.B2: {
-                "style": "Use complex sentence structures, various tenses and conditionals, abstract concepts, detailed descriptions with nuance",
-                "word_target": max(word_count, 280),
+                "style": "Complex sentences with multiple clauses, full range of tenses and conditionals, abstract concepts, detailed descriptions with nuance, hedging language",
+                "word_target": max(word_count, 480),
                 "sentence_length": "varied",
-                "topics_hint": "current events, cultural topics, professional subjects, opinions"
+                "topics_hint": "current events, cultural topics, professional subjects, nuanced arguments",
             },
             DifficultyLevel.C1: {
-                "style": "Use sophisticated language with idioms, complex ideas and argumentation, nuanced expressions, advanced cohesion",
-                "word_target": max(word_count, 400),
+                "style": "Sophisticated language with idioms, complex argumentation, nuanced expressions, subjunctive where appropriate, advanced cohesion across paragraphs",
+                "word_target": max(word_count, 650),
                 "sentence_length": "complex",
-                "topics_hint": "academic topics, specialized fields, nuanced debates, literary themes"
+                "topics_hint": "academic topics, specialised fields, nuanced debates, literary themes",
             },
             DifficultyLevel.C2: {
-                "style": "Use highly sophisticated native-like language, complex abstract concepts, subtle meanings, academic register when appropriate",
-                "word_target": max(word_count, 500),
+                "style": "Highly sophisticated near-native language, complex abstract concepts, subtle meanings, register switching for stylistic effect, full grammatical range",
+                "word_target": max(word_count, 850),
                 "sentence_length": "native-like",
-                "topics_hint": "any topic with native-level complexity"
-            }
-        }
-
-        # Text type specific instructions with examples
-        text_type_instructions = {
-            ReadingTextType.ARTICLE: {
-                "format": "Write an informative article with a compelling title, engaging introduction, informative body paragraphs with facts and examples, and a conclusion",
-                "structure": "Title → Introduction (hook + thesis) → Body (2-3 paragraphs with facts) → Conclusion"
+                "topics_hint": "any topic with native-level complexity, including specialised, literary, or technical",
             },
-            ReadingTextType.STORY: {
-                "format": "Write an engaging narrative story with interesting characters, a clear setting, a problem/conflict, and a resolution",
-                "structure": "Setting/Characters → Problem/Conflict → Rising action → Resolution"
-            },
-            ReadingTextType.NEWS: {
-                "format": "Write a news article following journalistic standards: who, what, when, where, why, how",
-                "structure": "Headline → Lead paragraph (main facts) → Supporting details → Background → Quotes if relevant"
-            },
-            ReadingTextType.LETTER: {
-                "format": "Write a letter with appropriate greeting, clear purpose, supporting details, and proper closing",
-                "structure": "Greeting → Purpose → Details → Request/Action → Closing"
-            },
-            ReadingTextType.ESSAY: {
-                "format": "Write a structured essay with clear thesis, supporting arguments, and conclusion",
-                "structure": "Introduction (thesis) → Body paragraphs (arguments + evidence) → Conclusion"
-            },
-            ReadingTextType.DIALOGUE: {
-                "format": "Write a natural conversation between 2-3 people with realistic exchanges",
-                "structure": "Context setting → Natural dialogue exchange → Resolution/Ending"
-            },
-            ReadingTextType.INSTRUCTION: {
-                "format": "Write clear step-by-step instructions that are easy to follow",
-                "structure": "Introduction/Purpose → Materials/Prerequisites → Step-by-step instructions → Tips/Conclusion"
-            }
         }
 
         level_info = level_guidelines.get(level, level_guidelines[DifficultyLevel.B1])
-        type_info = text_type_instructions.get(text_type, text_type_instructions[ReadingTextType.ARTICLE])
 
-        prompt = f"""You are an expert English language content creator specializing in creating authentic, engaging reading materials for language learners.
+        prompt = f"""You are an expert English-language writer producing
+authentic reading material for adult learners. Write the {text_type.value}
+below — a real piece of writing, not a textbook exercise.
 
-Create a {text_type.value} in English about "{topic}" for CEFR {level.value} level learners.
+TOPIC:  {topic}
 
-=== CONTENT REQUIREMENTS ===
-• Word count: approximately {level_info['word_target']} words
-• CEFR Level: {level.value}
-• Text type: {text_type.value}
+{cefr_block(level.value)}
 
-=== WRITING STYLE ===
+{HUMAN_VOICE_RULES}
+
+{creative_brief}
+
+LENGTH
+  • Aim for approximately {level_info['word_target']} words. Going
+    10-15% over is fine if the piece earns it; going under is not —
+    we want a substantive passage, not a snippet.
+
+WRITING STYLE NOTES
 {level_info['style']}
 
-=== TEXT STRUCTURE ===
-{type_info['format']}
-Structure: {type_info['structure']}
-
-=== VOCABULARY TO INCORPORATE ===
-Naturally weave these vocabulary words into your text:
+VOCABULARY TO WEAVE IN (naturally — never forced)
 {vocab_context}
 
-=== CRITICAL QUALITY GUIDELINES ===
-1. CREATE AUTHENTIC CONTENT: Write as if this were a real {text_type.value} from a magazine, newspaper, or book - NOT a textbook exercise
-2. MEANINGFUL CONTENT: Include interesting facts, real-world information, or engaging narrative elements
-3. NATURAL FLOW: The text should read naturally; vocabulary words should fit seamlessly, not feel forced
-4. CULTURAL RELEVANCE: Include references that make the content feel contemporary and relevant
-5. EDUCATIONAL VALUE: Readers should learn something new or be engaged by the content
-6. PROPER FORMATTING: Use appropriate paragraphs, and include a title if applicable
+SUBSTANTIVE DEPTH — non-negotiable
+  • Every paragraph must add new information, not restate the last one.
+  • Anchor each section in something concrete: a specific moment, a
+    named person doing something, a real-world detail (a time, a place,
+    a number, a sensory observation). Generic abstraction at any length
+    is failure.
+  • If a paragraph could be cut without losing meaning, it shouldn't be
+    there. Replace filler with substance.
+  • Develop ONE idea fully across the passage; don't sprinkle three
+    half-formed ideas.
+
+CRITICAL: Two requests for the same topic at the same level MUST produce
+genuinely different pieces. Different opening, different scene, different
+shape — that's the whole point of the creative brief above. Do not
+collapse back into a generic Title → Intro → Body → Conclusion structure
+unless the brief explicitly asked for that shape.
 
 === WHAT TO AVOID ===
-- Do NOT write meta-commentary about the exercise or lesson
-- Do NOT reference "learning vocabulary" or "practice reading" within the text
-- Do NOT create artificial or stilted sentences just to include vocabulary words
-- Do NOT write generic placeholder content
-- Do NOT reference previous lessons or what the student has learned
+- Meta-commentary about the exercise, lesson, or vocabulary list.
+- Generic openers ("In today's fast-paced world…", "It is important to…").
+- Recycling the same character archetype or scene every time.
+- Sentences engineered solely to use a vocabulary word.
 
 === OUTPUT ===
-Write ONLY the {text_type.value} content. Start directly with the title (if applicable) or the first sentence.
-Make this a piece of writing that would be interesting to read in any context, not just as a language exercise."""
+Write ONLY the {text_type.value} content. Start directly with the title
+(only if the structural shape calls for one) or the first sentence."""
 
         try:
             response = await asyncio.to_thread(
@@ -345,30 +413,60 @@ Make this a piece of writing that would be interesting to read in any context, n
     ) -> List[Dict[str, Any]]:
         """Generate comprehension questions for the text"""
         
-        prompt = f"""
-        Based on the following text, create 5 comprehension questions appropriate for {level.value} level students.
-        
-        Text:
-        {text_content}
-        
-        Create questions that:
-        1. Test understanding of main ideas
-        2. Check comprehension of details
-        3. Test vocabulary understanding (use some of these words: {', '.join([v['word'] for v in vocabulary_list])})
-        4. Are appropriate for {level.value} level
-        
-        Format each question as JSON with this structure:
-        {{
-            "question": "What is the main idea of the text?",
-            "type": "multiple_choice",
-            "options": ["A", "B", "C", "D"],
-            "correct_answer": "A",
-            "explanation": "The answer is A because..."
-        }}
-        
-        Include different question types: multiple_choice, true_false, short_answer.
-        Return as a JSON array of questions.
-        """
+        from app.services.prompt_library import cefr_block, HUMAN_VOICE_RULES
+
+        target_vocab = ", ".join([v.get("word", "") for v in vocabulary_list if v.get("word")][:8])
+
+        prompt = f"""Create 5 comprehension questions based on the passage
+below. The questions must test real understanding, not surface recall —
+a strong reader at this level should still need to think.
+
+{cefr_block(level.value)}
+
+{HUMAN_VOICE_RULES}
+
+PASSAGE
+\"\"\"
+{text_content}
+\"\"\"
+
+TARGET VOCABULARY (try to test at least 2 of these in context, not
+definition-style): {target_vocab}
+
+QUESTION-MIX RULES (exactly 5 total)
+  1. One MAIN-IDEA question: "What is the writer's main point?" / "Why
+     was X mentioned?" — never answerable by quoting a single line.
+  2. One DETAIL question: a specific fact in the text the reader has to
+     locate.
+  3. One INFERENCE question: requires reading between the lines (tone,
+     implication, cause-effect not stated outright).
+  4. One VOCABULARY-IN-CONTEXT question: pick a word from the target
+     list, give the line it appears in, ask what it means HERE (not the
+     dictionary definition — the contextual one).
+  5. One PRODUCTION question: short_answer, learner writes 1–2 sentences
+     applying the text to their own life or opinion.
+
+PER QUESTION
+  • multiple_choice items need 4 plausible options. The wrong ones must
+    be defensible misreads, not nonsense.
+  • true_false items need a one-line justification in "explanation".
+  • short_answer items get a model answer plus 1–2 lines of marking
+    guidance (what makes an acceptable answer).
+  • Every "explanation" should teach — point at the line(s) of evidence
+    in the passage and explain the reasoning.
+
+Return ONLY a valid JSON array (no markdown fences):
+[
+  {{
+    "question_type": "main_idea|detail|inference|vocabulary_in_context|production",
+    "type": "multiple_choice|true_false|short_answer",
+    "question": "...",
+    "options": ["..."],          // [] for short_answer
+    "correct_answer": "...",     // model answer for short_answer
+    "explanation": "...",
+    "evidence": "the line or paragraph the answer comes from (paste it)"
+  }}
+]"""
 
         try:
             response = await asyncio.to_thread(

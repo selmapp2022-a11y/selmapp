@@ -99,13 +99,25 @@ class CRUDLesson(_SyncMixin, CRUDBase[AIGeneratedLesson, AILessonCreate, AILesso
         difficulty_level: str,
         topic: Optional[str] = None
     ) -> Optional[AIGeneratedLesson]:
-        """Get a specific cached lesson"""
+        """Get a specific cached lesson.
+
+        2026-05-13: now filters by ``version == CONTENT_GENERATION_VERSION``
+        so a content-generation code bump invalidates every old lesson
+        without dropping the table. Before this, the ``version`` column
+        was set on insert but never checked on read — lessons generated
+        with v1 prompts kept serving forever even after we changed the
+        prompts.
+        """
+        # Lazy import to avoid pulling app.services at model import time.
+        from app.services.content_cache_service import CONTENT_GENERATION_VERSION
+
         query = db.query(self.model).filter(
             and_(
                 self.model.user_id == user_id,
                 self.model.lesson_type == lesson_type,
                 self.model.difficulty_level == difficulty_level,
                 self.model.is_active == True,
+                self.model.version == CONTENT_GENERATION_VERSION,
                 or_(
                     self.model.expires_at.is_(None),
                     self.model.expires_at > func.now()

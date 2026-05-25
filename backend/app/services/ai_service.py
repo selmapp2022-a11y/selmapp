@@ -2,29 +2,79 @@ import asyncio
 import aiohttp
 from typing import Dict, List, Optional, Any
 import google.generativeai as genai
-from gtts import gTTS
 import io
 import base64
 import logging
 
 from app.core.config import settings
+from app.services.prompt_library import (
+    cefr_block,
+    build_learner_context,
+    creative_seed,
+    dialogue_seed,
+    render_creative_brief,
+    render_dialogue_brief,
+    HUMAN_VOICE_RULES,
+    PEDAGOGY_RULES,
+)
 
 logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
-        # Configure Google Gemini
+        # Configure Google Gemini.
+        #
+        # 2026-05-13: ``self.gemini_model`` is now the CONTENT-tier
+        # model (gemini-2.5-pro by default). Previously this was
+        # flash-lite, which produced noticeably weaker multi-paragraph
+        # prose. The cost increase is intentional — Ebrahim approved
+        # it explicitly to lift content quality across the app.
+        #
+        # ``self.fast_model`` keeps a flash-lite handle for the few
+        # paths that genuinely need sub-second latency over quality
+        # (e.g. real-time grammar-answer feedback). New code should
+        # default to ``self.gemini_model``.
+        #
+        # If the CONTENT model fails to initialise (wrong name, quota,
+        # etc.) we fall back to flash-lite so the app degrades to "old
+        # quality" instead of failing outright.
         if settings.GOOGLE_GEMINI_API_KEY:
             genai.configure(api_key=settings.GOOGLE_GEMINI_API_KEY)
-            # Use configurable models
+
+            content_name = getattr(
+                settings, "GEMINI_TEXT_MODEL_CONTENT", None
+            ) or getattr(settings, "GEMINI_TEXT_MODEL_FAST", "gemini-2.5-flash-lite")
+            fast_name = getattr(
+                settings, "GEMINI_TEXT_MODEL_FAST", "gemini-2.5-flash-lite"
+            )
+
             try:
-                self.gemini_model = genai.GenerativeModel(settings.GEMINI_TEXT_MODEL_FAST)
-                logger.info(f"Gemini model initialized: {settings.GEMINI_TEXT_MODEL_FAST}")
+                self.gemini_model = genai.GenerativeModel(content_name)
+                logger.info("Gemini CONTENT model initialised: %s", content_name)
             except Exception as e:
-                logger.error(f"Failed to init Gemini model {settings.GEMINI_TEXT_MODEL_FAST}: {e}")
-                self.gemini_model = None
+                logger.warning(
+                    "Failed to init CONTENT model %s; using FAST as primary: %s",
+                    content_name, e,
+                )
+                try:
+                    self.gemini_model = genai.GenerativeModel(fast_name)
+                    logger.info("Gemini FAST model initialised (fallback): %s", fast_name)
+                except Exception as e2:
+                    logger.error("Failed to init any Gemini model: %s", e2)
+                    self.gemini_model = None
+
+            try:
+                self.fast_model = genai.GenerativeModel(fast_name)
+            except Exception:
+                # If FAST init fails but CONTENT works, just reuse it.
+                self.fast_model = self.gemini_model
+
+            # Alias kept for callers that already use this name.
+            self.content_model = self.gemini_model
         else:
             self.gemini_model = None
+            self.fast_model = None
+            self.content_model = None
             logger.warning("Google Gemini API key not configured")
 
     async def generate_exercise_content(
@@ -38,76 +88,90 @@ class AIService:
         if not self.gemini_model:
             raise ValueError("Gemini API not configured")
 
-        prompt = f"""You are an expert English teacher creating a lesson + practice set.
+        prompt = f"""You are designing a single lesson + practice set for an
+adult English learner. The output goes directly into a mobile app — there
+is no teacher in the loop to fix weak material — so the writing has to do
+the work of a real teacher: specific, level-appropriate, and engaging.
 
-Topic: {topic}
-CEFR Level: {difficulty_level}  
-Exercise Type: {exercise_type}
-Number of practice questions: {count}
+LESSON BRIEF
+  Topic:           {topic}
+  Exercise type:   {exercise_type}
+  Practice items:  {count}
 
-IMPORTANT STRUCTURE:
-1. Create a LESSON section first with vocabulary and grammar explanation
-2. Then create practice exercises
-3. The "vocabulary_words" array at the TOP LEVEL must be IDENTICAL to lesson.vocabulary_words (this is for UI display)
+{cefr_block(difficulty_level)}
 
-For vocabulary items, include ALL these fields:
-- word: the vocabulary word
-- part_of_speech: noun/verb/adjective/etc
-- definition: clear definition
-- simple_explanation: easy explanation for the learner
-- example_sentence: sentence using the word in context
-- usage_tip: helpful tip on how to use it
+{HUMAN_VOICE_RULES}
 
-For grammar (if exercise_type is "grammar"), include in grammar_summary:
-- title: the grammar rule name
-- explanation: clear explanation
-- examples: 3-5 example sentences
-- common_mistakes: 2-3 mistakes to avoid
+{PEDAGOGY_RULES}
 
-Return ONLY valid JSON (no markdown, no code blocks):
+CONTENT REQUIREMENTS
+  1. Vocabulary: 8–12 items that genuinely belong in a {difficulty_level}
+     conversation about "{topic}" — not just words tangentially related.
+     Each item needs: the word, part of speech, learner-friendly
+     definition, a one-line plain-English explanation, a concrete example
+     sentence using the word (a real situation, not "This is an example
+     of X"), and a usage_tip that warns about a real mistake learners
+     make with this word.
+  2. Grammar (only when exercise_type is "grammar"): one focused rule
+     directly useful for the topic. Provide three example sentences in
+     contrasting situations, and two common-mistake examples each with
+     a fix.
+  3. Practice exercises: produce exactly {count}. Mix question types
+     (multiple_choice, fill_in_blank, sentence_transformation) where
+     reasonable. Every question must:
+       • test something the lesson actually taught,
+       • have a single defensible correct answer,
+       • include an "explanation" that teaches the rule, not just states
+         the answer,
+       • for multiple_choice, give plausible distractors based on common
+         {difficulty_level} learner errors — never throwaway nonsense.
+  4. Match the "vocabulary_words" top-level array EXACTLY to
+     lesson.vocabulary_words (the UI reads from the top level).
+
+Return ONLY valid JSON, no markdown fences, in this exact shape:
 {{
   "topic": "{topic}",
   "level": "{difficulty_level}",
   "lesson": {{
-    "objective": "one sentence learning goal",
+    "objective": "By the end of this lesson, learners will be able to ___ (one observable skill).",
     "vocabulary_words": [
       {{
-        "word": "example",
-        "part_of_speech": "noun",
-        "definition": "a thing characteristic of its kind",
-        "simple_explanation": "something that shows what other things are like",
-        "example_sentence": "This is an example of good writing.",
-        "usage_tip": "Use 'for example' to introduce examples"
+        "word": "...",
+        "part_of_speech": "noun|verb|adjective|adverb|phrasal_verb|idiom",
+        "definition": "...",
+        "simple_explanation": "...",
+        "example_sentence": "concrete situation using the word",
+        "usage_tip": "real-world tip OR common-mistake warning"
       }}
     ],
     "grammar_point": {{
-      "title": "Grammar Rule Name",
-      "explanation": "Clear explanation of the rule",
-      "examples": ["Example sentence 1", "Example sentence 2"],
-      "common_mistakes": ["Common mistake 1", "Common mistake 2"]
+      "title": "...",
+      "explanation": "...",
+      "examples": ["...", "...", "..."],
+      "common_mistakes": [
+        {{"mistake": "...", "fix": "..."}},
+        {{"mistake": "...", "fix": "..."}}
+      ]
     }}
   }},
-  "vocabulary_words": [COPY THE SAME ARRAY FROM lesson.vocabulary_words HERE],
+  "vocabulary_words": [COPY OF lesson.vocabulary_words],
   "grammar_summary": {{
-    "title": "Grammar Rule Name",
-    "explanation": "Clear explanation",
-    "examples": ["Example 1", "Example 2"],
-    "common_mistakes": ["Mistake 1", "Mistake 2"]
+    "title": "...",
+    "explanation": "...",
+    "examples": ["...", "..."],
+    "common_mistakes": ["...", "..."]
   }},
   "exercises": [
     {{
-      "question": "Question text here",
-      "type": "multiple_choice",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "correct_answer": "Option A",
-      "explanation": "Why this is the correct answer",
-      "target": "vocabulary"
+      "question": "...",
+      "type": "multiple_choice|fill_in_blank|sentence_transformation",
+      "options": ["...", "...", "...", "..."],
+      "correct_answer": "...",
+      "explanation": "Explain WHY it is correct — teach the rule.",
+      "target": "vocabulary|grammar"
     }}
   ]
-}}
-
-Generate 8-12 vocabulary words appropriate for {difficulty_level} level about "{topic}".
-Generate {count} practice exercises."""
+}}"""
 
         try:
             response = await asyncio.to_thread(
@@ -189,30 +253,51 @@ Generate {count} practice exercises."""
         is_correct = selected_answer == correct_answer
         options_str = ", ".join(f'"{opt}"' for opt in options)
 
-        prompt = f"""You are an expert English teacher providing detailed feedback on a grammar practice question.
+        prompt = f"""You are a careful English-grammar tutor giving feedback
+on a single practice answer. Be specific, accurate, and encouraging —
+never patronising.
 
-Question: {question}
-Options: [{options_str}]
-Student's Answer: {selected_answer}
-Correct Answer: {correct_answer}
-Grammar Topic: {grammar_rule if grammar_rule else "General grammar"}
-Student Level: {user_level}
+CONTEXT
+  Question:           {question}
+  Options:            [{options_str}]
+  Student's answer:   {selected_answer}
+  Correct answer:     {correct_answer}
+  Grammar topic:      {grammar_rule if grammar_rule else "General grammar"}
+  Outcome:            {"CORRECT" if is_correct else "INCORRECT"}
 
-The student answered {"CORRECTLY" if is_correct else "INCORRECTLY"}.
+{cefr_block(user_level)}
 
-Provide helpful, encouraging feedback that helps the student understand WHY the correct answer is correct.
+{HUMAN_VOICE_RULES}
+
+WHAT TO PRODUCE
+  • explanation: 2–3 sentences. Don't restate the answer; explain WHY
+    the rule selects it.
+  • rule_explanation: name the rule (e.g. "second conditional"), give
+    the structure in plain symbols (If + past simple, would + base
+    verb), and one short prose paragraph.
+  • examples: three different example sentences using the rule in
+    different real-life situations.
+  • common_mistakes: two specific learner errors with this rule at
+    {user_level} level, each with a one-line fix.
+  • tip: one memorable, short tip — a pattern, an analogy, or a
+    mnemonic. Not "practice more".
+  • why_wrong: only when the answer was incorrect, explain what the
+    student's choice WOULD have meant or where it breaks the rule. If
+    correct, return an empty string.
 
 Return ONLY valid JSON (no markdown):
 {{
     "is_correct": {str(is_correct).lower()},
-    "explanation": "2-3 sentences explaining why '{correct_answer}' is the correct answer. Be specific about the grammar rule.",
-    "rule_explanation": "Clear explanation of the grammar rule being tested, with the rule name if applicable.",
-    "examples": ["Example sentence 1 using this grammar correctly", "Example sentence 2", "Example sentence 3"],
-    "common_mistakes": ["A common mistake learners make with this grammar point", "Another common error to avoid"],
-    "tip": "A helpful tip for remembering or applying this grammar rule correctly.",
-    "why_wrong": "{'' if is_correct else 'Explain specifically why the selected answer is incorrect and what it would mean if used.'}"
-}}
-"""
+    "explanation": "...",
+    "rule_explanation": "...",
+    "examples": ["...", "...", "..."],
+    "common_mistakes": [
+        {{"mistake": "...", "fix": "..."}},
+        {{"mistake": "...", "fix": "..."}}
+    ],
+    "tip": "...",
+    "why_wrong": "{'' if is_correct else '...'}"
+}}"""
 
         try:
             response = await asyncio.to_thread(
@@ -255,31 +340,46 @@ Return ONLY valid JSON (no markdown):
         if not self.gemini_model:
             raise ValueError("Gemini API not configured")
 
-        prompt = f"""
-        Provide a comprehensive explanation of the English word "{word}" for {level} level students.
-        
-        Include:
-        1. Definition (simple and clear)
-        2. Part of speech
-        3. Pronunciation guide
-        4. 3 example sentences
-        5. Common collocations
-        6. Synonyms and antonyms (if applicable)
-        7. Usage notes
-        
-        Format as JSON:
-        {{
-            "word": "{word}",
-            "definition": "...",
-            "part_of_speech": "...",
-            "pronunciation": "...",
-            "examples": ["...", "...", "..."],
-            "collocations": ["...", "..."],
-            "synonyms": ["...", "..."],
-            "antonyms": ["...", "..."],
-            "usage_notes": "..."
-        }}
-        """
+        prompt = f"""Teach the English word "{word}" to an adult international
+learner. Make this feel like a tutor explaining the word in person —
+specific, accurate, and useful — not a dictionary dump.
+
+{cefr_block(level)}
+
+REQUIREMENTS
+  • Definition: clear and learner-friendly, calibrated to the level
+    above. Avoid circular definitions.
+  • Pronunciation: IPA in slashes (e.g. /ˈekzæmpl/), plus a short
+    plain-English approximation when the IPA is tricky.
+  • Three example sentences in contrasting contexts (e.g. work, daily
+    life, opinion) — concrete and human. No "This is a {word}."
+  • Collocations: the 3–6 word partners learners actually need first
+    (verb+noun, adjective+noun, etc.).
+  • Synonyms and antonyms with a one-line note on when each fits or
+    doesn't — synonyms are rarely fully interchangeable.
+  • Usage notes: the one mistake learners commonly make with this word
+    at this level, and how to avoid it.
+
+Return ONLY valid JSON:
+{{
+    "word": "{word}",
+    "definition": "...",
+    "part_of_speech": "...",
+    "pronunciation_ipa": "...",
+    "pronunciation_plain": "...",
+    "examples": ["...", "...", "..."],
+    "collocations": [
+        {{"phrase": "...", "note": "common partner — when to use"}}
+    ],
+    "synonyms": [
+        {{"word": "...", "note": "how it differs from the headword"}}
+    ],
+    "antonyms": [
+        {{"word": "...", "note": "..."}}
+    ],
+    "common_mistake": {{"mistake": "...", "fix": "..."}},
+    "usage_notes": "..."
+}}"""
 
         try:
             response = await asyncio.to_thread(
@@ -293,13 +393,37 @@ Return ONLY valid JSON (no markdown):
     async def generate_text_to_speech(
         self, text: str, language: str = "en", slow: bool = False
     ) -> Optional[bytes]:
-        """Generate audio from text using Google TTS"""
+        """Generate audio bytes for ``text`` via the unified TTS factory.
+
+        Routes through ``get_tts_service()`` so the call honours the
+        ``TTS_PROVIDER`` env var — by default ElevenLabs (natural human
+        voice), with automatic Gemini fallback if the ElevenLabs key is
+        missing. The old gTTS path produced robotic, low-quality audio
+        and bypassed both providers, so it was retired (2026-05-13).
+
+        ``language`` and ``slow`` are kept for call-site compatibility but
+        only English is currently supported by the rest of the pipeline.
+        """
         try:
-            tts = gTTS(text=text, lang=language, slow=slow)
-            audio_buffer = io.BytesIO()
-            tts.write_to_fp(audio_buffer)
-            audio_buffer.seek(0)
-            return audio_buffer.getvalue()
+            from app.services.gemini_tts_service import get_tts_service
+            tts = await get_tts_service()
+            result = await tts.generate_audio_content(
+                text=text,
+                audio_type="narration",
+            )
+            if not result.get("success"):
+                logger.error(
+                    "TTS failed via %s: %s",
+                    type(tts).__name__,
+                    result.get("error"),
+                )
+                return None
+            # Prefer the base64 payload — same shape both providers return.
+            b64 = result.get("audio_data_base64") or result.get("audio_data")
+            if b64:
+                return base64.b64decode(b64)
+            # Fallback: caller may resolve the audio_url separately.
+            return None
         except Exception as e:
             logger.error(f"Error generating TTS: {e}")
             return None
@@ -307,19 +431,97 @@ Return ONLY valid JSON (no markdown):
     async def analyze_pronunciation(
         self, audio_data: bytes, expected_text: str
     ) -> Dict[str, Any]:
-        """Analyze pronunciation (placeholder for ELSA API integration)"""
-        # This would integrate with ELSA API or similar service
-        # For now, return a mock response
+        """Analyze pronunciation, stress, fluency and intonation.
+
+        Routes through SpeechAce (premium endpoints) so we get
+        phoneme-level scoring, syllable stress, fluency, and an IELTS/CEFR
+        band — not a hardcoded mock. Was a placeholder until 2026-05-13.
+
+        Returns a normalised dict the frontend already knows how to render:
+
+            {
+              "score": float (0–100, overall),
+              "pronunciation_score": float,
+              "fluency_score": float,
+              "accuracy_score": float,
+              "transcript": str,
+              "word_scores": {word: score},
+              "phoneme_scores": {phoneme: score},
+              "pronunciation_issues": [{word, issue, suggestion, score}],
+              "feedback": str,
+              "suggestions": [str],
+              "ielts": { "overall_band": float, "cefr_level": str, ... } | None
+            }
+        """
+        # Defensive: empty audio or text → nothing to score.
+        if not audio_data:
+            return {
+                "score": 0.0,
+                "feedback": "No audio received. Please record again.",
+                "suggestions": ["Make sure your microphone is enabled."],
+                "word_scores": {},
+                "phoneme_scores": {},
+                "pronunciation_issues": [],
+            }
+
+        # Lazy import to avoid circulars at module-load time.
+        from app.services.speechace_service import SpeechaceService
+
+        if not getattr(settings, "SPEECHACE_API_KEY", None):
+            logger.warning(
+                "analyze_pronunciation called but SPEECHACE_API_KEY is not "
+                "set — returning a minimal heuristic result. Configure "
+                "SPEECHACE_API_KEY in .env for real phoneme-level scoring."
+            )
+            return {
+                "score": 0.0,
+                "feedback": (
+                    "Pronunciation scoring is not configured on this "
+                    "deployment. Ask the operator to set SPEECHACE_API_KEY."
+                ),
+                "suggestions": [],
+                "word_scores": {},
+                "phoneme_scores": {},
+                "pronunciation_issues": [],
+            }
+
+        service = SpeechaceService()
+        result = await service.assess_pronunciation(
+            audio_bytes=audio_data,
+            reference_text=expected_text or "",
+        )
+        if not result.get("success"):
+            logger.error(
+                "SpeechAce assess_pronunciation failed: %s",
+                result.get("error"),
+            )
+            return {
+                "score": 0.0,
+                "feedback": "Pronunciation analysis failed. Please try again.",
+                "suggestions": [],
+                "word_scores": {},
+                "phoneme_scores": {},
+                "pronunciation_issues": [],
+                "error": result.get("error"),
+            }
+
+        a = result.get("assessment") or {}
+        # Adapt SpeechAce's keys to the historical shape this endpoint
+        # exposed so frontend rendering doesn't have to change.
         return {
-            "score": 85.0,
-            "feedback": "Good pronunciation overall. Work on the 'th' sound.",
-            "word_scores": [
-                {"word": "hello", "score": 90},
-                {"word": "world", "score": 80}
-            ],
-            "suggestions": [
-                "Practice the 'th' sound by placing your tongue between your teeth"
-            ]
+            "score": float(a.get("overall_score", 0.0) or 0.0),
+            "pronunciation_score": float(
+                a.get("pronunciation_score", 0.0) or 0.0
+            ),
+            "fluency_score": float(a.get("fluency_score", 0.0) or 0.0),
+            "accuracy_score": float(a.get("accuracy_score", 0.0) or 0.0),
+            "transcript": a.get("transcribed_text", "") or "",
+            "word_scores": a.get("word_scores", {}) or {},
+            "phoneme_scores": a.get("phoneme_scores", {}) or {},
+            "pronunciation_issues": a.get("pronunciation_issues", []) or [],
+            "detailed_word_feedback": a.get("detailed_word_feedback", []) or [],
+            "feedback": a.get("feedback", "") or "",
+            "suggestions": a.get("suggestions", []) or [],
         }
 
     async def generate_conversation_practice(
@@ -329,29 +531,58 @@ Return ONLY valid JSON (no markdown):
         if not self.gemini_model:
             raise ValueError("Gemini API not configured")
 
-        prompt = f"""
-        Create a conversation practice scenario for {level} level English students.
-        Topic: {topic}
-        Number of turns: {turns}
-        
-        Create a realistic dialogue between two people with:
-        1. Natural conversation flow
-        2. Appropriate vocabulary for {level} level
-        3. Common phrases and expressions
-        4. Cultural context
-        
-        Format as JSON:
-        {{
-            "scenario": "...",
-            "dialogue": [
-                {{"speaker": "A", "text": "..."}},
-                {{"speaker": "B", "text": "..."}}
-            ],
-            "vocabulary": ["word1", "word2", ...],
-            "phrases": ["phrase1", "phrase2", ...],
-            "cultural_notes": "..."
-        }}
-        """
+        d_seed = dialogue_seed()
+        d_brief = render_dialogue_brief(d_seed)
+
+        prompt = f"""Write a short conversation practice that sounds like
+two real people speaking — not a textbook example.
+
+BRIEF
+  Topic:     {topic}
+  Turns:     exactly {turns}
+  Audience:  international English learner, any background
+
+{cefr_block(level)}
+
+{HUMAN_VOICE_RULES}
+
+{d_brief}
+
+DIALOGUE RULES
+  • Use the speakers' names from the brief above for every line. Do
+    NOT use generic labels like "Speaker A" / "Speaker B".
+  • Open with a specific concrete moment in the scene above — someone
+    is doing something, somewhere, for a reason. Don't write "X meets Y".
+  • The conversation should have the small arc described in the
+    brief's "Tension" line — not just polite greetings.
+  • Each speaker should sound different: different sentence length,
+    different reactive habits, different filler words ("right",
+    "honestly", "I mean", "huh"), where the level allows.
+  • Keep total length appropriate for the level's sentence rules.
+  • Pull 5–8 useful target vocabulary items that genuinely appear in
+    the dialogue, plus 3–5 ready-made phrases learners can reuse
+    elsewhere (e.g. "do you mind if I…", "I see what you mean").
+
+Return ONLY valid JSON in this shape:
+{{
+  "scenario": "One sentence setting the scene: who, where, why.",
+  "speakers": [
+    {{"name": "...", "gender": "female|male|unspecified", "role": "short role label"}},
+    {{"name": "...", "gender": "female|male|unspecified", "role": "..."}}
+  ],
+  "dialogue": [
+    {{"speaker": "<name>", "text": "..."}}
+  ],
+  "vocabulary": [
+    {{"word": "...", "definition": "...", "example": "the line from the dialogue where it appears"}}
+  ],
+  "phrases": [
+    {{"phrase": "...", "use_when": "natural situation where a learner could deploy this"}}
+  ],
+  "comprehension_check": [
+    {{"question": "...", "answer": "..."}}
+  ]
+}}"""
 
         try:
             response = await asyncio.to_thread(
@@ -619,64 +850,73 @@ Return ONLY valid JSON (no markdown):
             - Difficulty: {current_lesson_context.get('level', user_profile.get('current_level', 'A1'))}
             """
 
-        prompt = f"""
-        You are an AI English learning trainer. Respond to the user's message with a helpful, encouraging, and educational response.
-        
-        User Profile:
-        - Current Level: {user_profile.get('current_level', 'A1')}
-        - Native Language: {user_profile.get('native_language', 'Persian')}
-        - Learning Goals: {', '.join(user_profile.get('learning_goals', []))}
-        - Preferred Categories: {', '.join(user_profile.get('preferred_categories', []))}
-        - Learning Style: {user_profile.get('learning_style', 'mixed')}
-        - Daily Study Time: {user_profile.get('daily_study_commitment', 30)} minutes
-        
-        {lesson_context}
-        
-        Recent Conversation History:
-        {history_context if history_context else "This is the start of the conversation."}
-        
-        User's Message: "{user_message}"
-        
-        Respond as a supportive English teacher who:
-        1. Addresses the user's specific question or need
-        2. Provides clear, level-appropriate explanations
-        3. Gives practical examples and usage tips
-        4. Suggests next learning steps
-        5. Maintains an encouraging and motivating tone
-        6. Uses simple language appropriate for their level
-        
-        If the user made any English errors, gently correct them with explanations.
-        If they're asking for help with specific grammar/vocabulary, provide clear explanations with examples.
-        If they're sharing progress or concerns, respond with encouragement and actionable advice.
-        
-        Format as JSON:
-        {{
-            "trainer_response": "...",
-            "message_type": "encouragement|correction|explanation|instruction|assessment",
-            "corrections": [
-                {{
-                    "original": "...",
-                    "corrected": "...",
-                    "explanation": "..."
-                }}
-            ],
-            "suggested_actions": [
-                {{
-                    "action": "...",
-                    "description": "...",
-                    "estimated_time_minutes": 10
-                }}
-            ],
-            "follow_up_questions": ["...", "..."],
-            "vocabulary_highlights": [
-                {{
-                    "word": "...",
-                    "definition": "...",
-                    "example": "..."
-                }}
-            ]
-        }}
-        """
+        # Build a neutral, optional native-language line. We deliberately
+        # do NOT default to any specific language — SELM ships globally.
+        native_lang = user_profile.get("native_language")
+        native_line = (
+            f"  - native language: {native_lang} (use only if it helps "
+            f"avoid known L1 interference patterns)\n"
+            if native_lang
+            else ""
+        )
+
+        learner_block = build_learner_context(
+            user_profile, include_history_hint=bool(history_context)
+        )
+
+        level = user_profile.get("current_level", "A1")
+
+        prompt = f"""You are an AI English-language coach. The learner just
+sent you a message — respond like a real tutor: address the actual question
+or moment, calibrate to the learner's level, and keep the tone warm without
+being saccharine.
+
+{learner_block}
+{native_line}
+{cefr_block(level)}
+
+{HUMAN_VOICE_RULES}
+
+{lesson_context}
+
+Recent conversation:
+{history_context if history_context else "(This is the start of the conversation.)"}
+
+Learner's message:
+\"\"\"
+{user_message}
+\"\"\"
+
+RESPONSE RULES
+  • Address the actual question first. Don't pad with "Great question!".
+  • Write the trainer_response in English at or slightly above the
+    learner's CEFR level — never below, to nudge growth — but always
+    decodable. If you use a word that's clearly beyond level, gloss it
+    in parentheses on first use.
+  • If the learner made a small mistake, correct ONE meaningful issue
+    explicitly (not every minor slip — pick the most useful). Add it to
+    the "corrections" array with the rule. If they made no mistakes,
+    return an empty corrections array.
+  • Suggest 1–3 concrete next actions, each tied to something they can
+    do in the app (a specific lesson type, a 5-minute drill, etc.).
+  • End with one open follow-up question that nudges them to produce
+    English back, not just consume it.
+
+Return ONLY valid JSON:
+{{
+    "trainer_response": "...",
+    "message_type": "encouragement|correction|explanation|instruction|assessment",
+    "corrections": [
+        {{"original": "...", "corrected": "...", "explanation": "..."}}
+    ],
+    "suggested_actions": [
+        {{"action": "...", "description": "...", "estimated_time_minutes": 10}}
+    ],
+    "follow_up_questions": ["..."],
+    "vocabulary_highlights": [
+        {{"word": "...", "definition": "...", "example": "..."}}
+    ]
+}}"""
 
         try:
             response = await asyncio.to_thread(
@@ -836,14 +1076,22 @@ Please provide a well-structured response in JSON format."""
             else ""
         )
 
-        prompt = f"""
-        You are an expert English writing teacher. Analyze this {writing_type} written by a {user_level} level student.{task_block}
-        TEXT TO ANALYZE:
-        "{text}"
+        prompt = f"""You are an experienced English writing examiner.
+Assess this {writing_type} written by a {user_level}-level learner.
+Judge it against the level criteria below — not against native-speaker
+prose — and explain every error so the writer learns the rule, not just
+the fix.{task_block}
+{cefr_block(user_level)}
 
-        Provide a comprehensive, educational assessment. Be specific about errors and give clear corrections.
-        If a TASK was given above, judge how well the response addresses it (Task Achievement).
-        Focus on being helpful - show EXACTLY what was wrong and HOW to fix it.
+TEXT TO ANALYZE:
+\"\"\"
+{text}
+\"\"\"
+
+Be specific about errors and give clear corrections. If a TASK was
+given above, judge how well the response addresses it
+(Task Achievement). For each error: show the exact wrong phrase, the
+fixed version, and one-line teaching of the underlying rule.
         
         Return ONLY valid JSON (no markdown):
         {{

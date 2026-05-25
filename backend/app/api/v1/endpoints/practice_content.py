@@ -303,7 +303,6 @@ async def heal_audio_cache(
 async def get_micro_lesson(
     skill_type: str,
     topic: Optional[str] = None,
-    level: Optional[str] = None,
     background_tasks: BackgroundTasks = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -324,11 +323,7 @@ async def get_micro_lesson(
     If broken (local file), invalidates cache and regenerates fresh content.
     """
     try:
-        valid_levels = {"A1","A2","B1","B2","C1","C2"}
-        if level and level.upper() in valid_levels:
-            user_level = level.upper()
-        else:
-            user_level = current_user.current_level.value if current_user.current_level else "B1"
+        user_level = current_user.current_level.value if current_user.current_level else "B1"
         _require_practice_access(sync_db, current_user, skill_type=skill_type, level=user_level)
         
         # Select topic if not provided
@@ -337,8 +332,18 @@ async def get_micro_lesson(
             topics = DEFAULT_TOPICS.get(skill_type, ["general English"])
             topic = random.choice(topics)
         
-        # Check cache first
-        cache_key = f"micro:{current_user.id}:{skill_type}:{user_level}:{topic.replace(' ', '_')}"
+        # Check cache first.
+        # The trailing `gen:` segment is the same content-version suffix
+        # used in content_cache_service.build_cache_key so a code-level
+        # prompt change invalidates micro-lessons too. Without this,
+        # every user kept seeing the pre-deploy templated content
+        # forever — by far the biggest reason "the bot still doesn't
+        # use the new repositories" on iPhone (2026-05-13 audit).
+        from app.services.content_cache_service import CONTENT_GENERATION_VERSION
+        cache_key = (
+            f"micro:{current_user.id}:{skill_type}:{user_level}:"
+            f"{topic.replace(' ', '_')}:gen:{CONTENT_GENERATION_VERSION}"
+        )
         
         result = await db.execute(
             select(GeneratedContentCache).where(
@@ -545,14 +550,50 @@ async def _generate_micro_lesson(
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Generate a small micro-lesson quickly.
-    Uses skill-specific prompts for proper content.
+
+    2026-05-13 rewrite — Why
+    ------------------------
+    Previously, this function had its own ad-hoc per-skill prompts that
+    bypassed the entire prompt_library (CEFR matrix, HUMAN_VOICE_RULES,
+    creative_seed, dialogue_seed). The deeper iPhone-app audit traced
+    "the bot doesn't use the new repositories" directly to this code:
+    every practice screen on iOS calls this endpoint, and none of the
+    new variety, voice, or pedagogy infrastructure ever ran here.
+
+    Now every sub-prompt:
+      • pastes the level-specific CEFR spec verbatim,
+      • includes HUMAN_VOICE_RULES,
+      • pulls a fresh creative_seed (reading/speaking/writing) or
+        dialogue_seed (listening) so two requests with the same topic
+        + level produce different content.
     """
+    from app.services.prompt_library import (
+        cefr_block,
+        creative_seed,
+        dialogue_seed,
+        render_creative_brief,
+        render_dialogue_brief,
+        HUMAN_VOICE_RULES,
+    )
     try:
+        skill = skill_type.lower()
+
         # Skill-specific prompts for better content generation
-        if skill_type.lower() == 'reading':
-            # Word count based on level
-            word_counts = {"A1": "60-80", "A2": "80-120", "B1": "150-200", "B2": "200-280", "C1": "280-400", "C2": "400-500"}
-            target_words = word_counts.get(level, "100-150")
+        if skill == 'reading':
+            # Word count based on level. 2026-05-13: substantially bumped
+            # from the previous (A1=60-80, C2=400-500) to give the
+            # creative brief room to unfold a real piece of writing.
+            # User flagged that short passages felt thin even at lower
+            # levels — Ebrahim's note "افزایش حجم متن‌ها در سشن‌های مختلف".
+            word_counts = {
+                "A1": "100-140",
+                "A2": "170-230",
+                "B1": "280-360",
+                "B2": "420-540",
+                "C1": "580-720",
+                "C2": "780-950",
+            }
+            target_words = word_counts.get(level, "300-400")
             import random
             style = random.choice([
                 "short news article",
@@ -560,25 +601,34 @@ async def _generate_micro_lesson(
                 "short story",
                 "email",
                 "how-to guide",
+                "interview transcript",
+                "diary entry",
+                "review of a place",
             ])
-            
-            prompt = f"""You are creating an ORIGINAL, authentic {style} reading passage for {level} level English learners.
+            r_seed = creative_seed(style)
+            r_brief = render_creative_brief(r_seed)
+
+            prompt = f"""Write an ORIGINAL {style} reading passage that reads
+like it came from a real publication — not a textbook exercise.
 Theme/topic: "{topic}"
 
-CRITICAL: Create a REAL, MEANINGFUL passage that reads like something from a real publication.
-It must NOT sound like a textbook or an AI template.
+{cefr_block(level)}
+
+{HUMAN_VOICE_RULES}
+
+{r_brief}
 
 Return ONLY valid JSON (no markdown):
 {{
   "type": "reading",
   "title": "An engaging title for the passage",
-  "text": "A {target_words} word passage. Write in natural paragraphs (use \\n\\n). Include concrete details (places, names, times, numbers) and a clear main idea. Keep grammar correct and vocabulary appropriate for {level}.",
+  "text": "A {target_words}-word passage. Use natural paragraphs (separate with \\n\\n). Include concrete details (places, names, times, numbers). Respect the CEFR spec above for vocabulary and grammar.",
   "questions": [
     {{
-      "question": "A comprehension question testing understanding of the main idea or key details",
+      "question": "A comprehension question — main idea, detail, inference, or vocabulary-in-context",
       "options": ["Option A", "Option B", "Option C", "Option D"],
       "correct_answer": "The correct option text",
-      "explanation": "Brief explanation of why this is correct"
+      "explanation": "Why this is correct, with reference to the passage"
     }}
   ],
   "vocabulary_highlights": ["word1", "word2", "word3"],
@@ -587,21 +637,42 @@ Return ONLY valid JSON (no markdown):
 }}
 
 REQUIREMENTS:
-- The passage MUST feel authentic: include interesting facts, real information, or engaging narrative
-- Avoid generic filler like "In today's world..." / "has become increasingly important..." unless it truly fits the passage
-- Write as if for a real publication, NOT as a language exercise
-- Do NOT reference "learners" or "students" in the text
-- Do NOT include meta-commentary about learning
-- Include {count} varied comprehension questions (main idea, detail, inference, vocabulary)
-- Make questions progressively challenging"""
-        
-        elif skill_type.lower() == 'listening':
-            prompt = f"""Generate a listening comprehension exercise for {level} level English learners about "{topic}".
+- Use the scene/opening/perspective/structure from the creative brief.
+- Two requests with the same topic + level MUST produce different
+  passages (different scene, different opening, different shape).
+- No meta-commentary about learning, no "In today's world…" filler.
+- SUBSTANTIVE: every paragraph adds new information. No restating, no
+  filler. Hit the target word count with REAL content (specific facts,
+  named people, concrete details), not padding. A short padded passage
+  is worse than a long substantive one.
+- Include exactly {count} comprehension questions, mixing question types."""
+
+        elif skill == 'listening':
+            d_seed = dialogue_seed()
+            d_brief = render_dialogue_brief(d_seed)
+            speaker_a = d_seed["speaker_a_name"]
+            speaker_b = d_seed["speaker_b_name"]
+            a_gender = 'female' if 'she' in d_seed['speaker_a_pronouns'] else 'male'
+            b_gender = 'female' if 'she' in d_seed['speaker_b_pronouns'] else 'male'
+
+            prompt = f"""Write a short listening-comprehension dialogue
+between TWO real-sounding people about "{topic}". A monologue is not
+acceptable — at least two speakers must speak multiple lines each.
+
+{cefr_block(level)}
+
+{HUMAN_VOICE_RULES}
+
+{d_brief}
 
 Return ONLY valid JSON (no markdown):
 {{
   "type": "listening",
-  "transcript": "A 80-120 word dialogue or monologue about {topic} appropriate for {level} level learners.",
+  "transcript": "Multi-speaker dialogue. Length by level: A1 90-130, A2 140-200, B1 220-300, B2 320-450, C1 500-650, C2 650-850 words. Format each line as 'Speaker Name: line of dialogue.' on its own line. Use the two names from the dialogue brief. Develop the conversation enough that both speakers exchange real ideas, not just greetings.",
+  "speakers": [
+    {{"name": "{speaker_a}", "gender": "{a_gender}"}},
+    {{"name": "{speaker_b}", "gender": "{b_gender}"}}
+  ],
   "questions": [
     {{
       "question": "Comprehension question about what was said",
@@ -612,145 +683,124 @@ Return ONLY valid JSON (no markdown):
   "points": 20
 }}
 
-Make the transcript natural and conversational. Include {count} comprehension questions."""
+REQUIREMENTS:
+- Both named speakers MUST speak multiple times — no monologue.
+- Use the scene / tension / relationship from the dialogue brief.
+- Include exactly {count} comprehension questions."""
 
-        elif skill_type.lower() == 'vocabulary':
-            prompt = f"""Generate {count} vocabulary practice items for {level} level English learners about "{topic}".
+        elif skill == 'vocabulary':
+            prompt = f"""Generate {count} vocabulary practice items for a learner
+about "{topic}". Each item teaches ONE word with a real example.
+
+{cefr_block(level)}
+
+{HUMAN_VOICE_RULES}
 
 Return ONLY valid JSON array (no markdown):
 [
   {{
     "type": "vocabulary",
-    "word": "example word",
-    "definition": "the meaning",
-    "question": "Choose the correct meaning of 'word'",
-    "options": ["definition 1", "definition 2", "definition 3", "definition 4"],
-    "correct_answer": "the correct definition",
-    "example_sentence": "A sentence using the word",
+    "word": "...",
+    "definition": "level-appropriate, learner-friendly definition",
+    "question": "Choose the correct meaning of '<word>' as used in: \\"<concrete sentence>\\"",
+    "options": ["plausible definition 1", "plausible definition 2", "plausible definition 3", "plausible definition 4"],
+    "correct_answer": "the correct definition (must match one option exactly)",
+    "example_sentence": "A new concrete sentence (not the question) using the word",
+    "usage_tip": "ONE-line warning about a real mistake learners make with this word",
     "points": 10
   }}
 ]
 
-Choose useful vocabulary words related to {topic}."""
+Pick words that genuinely belong in {level}-level usage about {topic}.
+Distractors must be defensible misreads, not throwaway nonsense."""
 
-        elif skill_type.lower() == 'writing':
-            prompt = f"""Generate a writing prompt for {level} level English learners about "{topic}".
+        elif skill == 'writing':
+            w_seed = creative_seed("essay")
+            prompt = f"""Generate ONE writing prompt that gives the learner
+something specific and engaging to write about — not a generic essay
+question.
+
+Theme/topic: "{topic}"
+
+{cefr_block(level)}
+
+INSPIRATION (use as flavour, not literally):
+  Scene: {w_seed['scene']}
+  Tone:  {w_seed['register']}
+  Place anchor: {w_seed['place']}
 
 Return ONLY valid JSON (no markdown):
 {{
   "type": "writing",
-  "question": "Write a paragraph/essay prompt about {topic}",
-  "guidelines": ["Guideline 1", "Guideline 2", "Guideline 3"],
-  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4"],
-  "min_words": 50,
+  "question": "A specific, concrete writing task — gives the learner a situation, a reader, and a clear purpose. NOT just 'write about {topic}'.",
+  "guidelines": ["3-5 guidelines on what to include — specific, not 'use good grammar'"],
+  "keywords": ["4-6 useful keywords for the topic at this level"],
+  "min_words": 80,
   "max_words": 200,
   "points": 25
-}}
+}}"""
 
-Make the prompt engaging and appropriate for {level} level."""
+        elif skill == 'speaking':
+            s_seed = creative_seed("story")
+            prompt = f"""Generate a single sentence the learner will read aloud
+for pronunciation practice.
 
-        elif skill_type.lower() == 'speaking':
-            # 2026-05-24 fix — production previously asked for the SAME
-            # "8-16 words, natural sentence" for every CEFR level, so A1
-            # and C1 users got near-identical practice content. Now we
-            # inject explicit per-level vocabulary / grammar / sentence
-            # length / phoneme-density rules so the read-aloud line
-            # genuinely matches the learner's level.
-            speaking_specs = {
-                "A1": {
-                    "words": "6-10 words",
-                    "vocabulary": "top ~800 most frequent English words only",
-                    "grammar": "present simple or past simple; subject-verb-object",
-                    "sentence": "one short clause, no subordination",
-                    "phonemes": "common sounds (b, p, t, d, k, g, m, n, s); avoid clusters",
-                },
-                "A2": {
-                    "words": "8-13 words",
-                    "vocabulary": "top ~1500 words; one common phrasal verb is fine",
-                    "grammar": "present, past, future with will/going to",
-                    "sentence": "one or two clauses joined by and / but / because",
-                    "phonemes": "include at least one of: th, sh, r, l",
-                },
-                "B1": {
-                    "words": "12-18 words",
-                    "vocabulary": "top ~2500 words; common collocations and one idiom is fine",
-                    "grammar": "all tenses, first/second conditional, modal verbs",
-                    "sentence": "two clauses with a clear connector (however, although, so)",
-                    "phonemes": "mix tricky consonant clusters (str, spl, thr) and a vowel pair",
-                },
-                "B2": {
-                    "words": "16-24 words",
-                    "vocabulary": "top ~4000 words; phrasal verbs and idiomatic phrases used naturally",
-                    "grammar": "mixed conditionals, passive voice, reported speech, relative clauses",
-                    "sentence": "two-to-three clauses with subordination and varied rhythm",
-                    "phonemes": "challenging combinations including silent letters and weak forms",
-                },
-                "C1": {
-                    "words": "20-30 words",
-                    "vocabulary": "wide-ranging including academic and idiomatic; precise word choice",
-                    "grammar": "advanced structures: inversions, cleft sentences, nuanced modality",
-                    "sentence": "long sentence with embedded clauses and discourse markers",
-                    "phonemes": "dense consonant clusters and intonation-bearing function words",
-                },
-                "C2": {
-                    "words": "24-36 words",
-                    "vocabulary": "full native-speaker range including low-frequency, figurative and stylistic choices",
-                    "grammar": "complex syntax; allow stylistic inversion, fronting, ellipsis",
-                    "sentence": "elaborate periodic sentence with multiple embedded ideas",
-                    "phonemes": "stress-timed rhythm, weak forms, linking, assimilation",
-                },
-            }
-            spec = speaking_specs.get(level, speaking_specs["B1"])
-            prompt = f"""Generate a PRONUNCIATION (read-aloud) speaking exercise for {level} level English learners.
 Theme/topic: "{topic}"
 
-LEVEL SPEC (must follow strictly):
-- Length: {spec['words']}
-- Vocabulary: {spec['vocabulary']}
-- Grammar: {spec['grammar']}
-- Sentence structure: {spec['sentence']}
-- Phoneme target: {spec['phonemes']}
+{cefr_block(level)}
+
+INSPIRATION (use as flavour):
+  Scene: {s_seed['scene']}
+  Tone:  {s_seed['register']}
 
 Return ONLY valid JSON (no markdown):
 {{
   "type": "speaking",
-  "question": "ONE complete, natural sentence the learner will read aloud, matching every constraint above. Correct grammar. Starts with a capital letter and ends with punctuation.",
-  "keywords": ["4-6 SINGLE WORDS from the sentence (no spaces)"],
-  "sample_response": "Repeat the exact same sentence from 'question' (verbatim).",
+  "question": "ONE natural English sentence (10-18 words) at this level — concrete situation, varied phonemes, correct grammar. Capital letter, ends with punctuation.",
+  "keywords": ["4-6 single words from the sentence (no spaces)"],
+  "sample_response": "Repeat the exact sentence from 'question' verbatim.",
   "points": 15
 }}
 
 RULES:
-- 'question' must be a sentence to read aloud, NOT an instruction
+- 'question' is a SENTENCE TO READ ALOUD, never an instruction
   (avoid: Describe..., Talk about..., Explain..., Answer...).
-- No blanks, no brackets, no quotes, no emojis.
-- Pick a concrete situation; vary phonemes so SpeechAce can score
-  pronunciation usefully.
-- Stay within the level spec — do NOT exceed the word count or use
-  vocabulary above the level."""
+- Pick a sentence with varied consonants/vowels so SpeechAce can score
+  pronunciation usefully. Include at least one tricky cluster
+  (th, sh, ch, r, l, w, or a vowel pair) where the level allows."""
 
         else:  # grammar or default
-            prompt = f"""Generate {count} quick grammar practice items for {level} level English learners.
-Topic: {topic}
+            prompt = f"""Generate {count} short grammar practice items.
+Theme/topic: "{topic}"
+
+{cefr_block(level)}
 
 Return ONLY valid JSON array (no markdown):
 [
   {{
     "type": "grammar",
-    "question": "Complete this sentence: I ___ to the store yesterday.",
-    "options": ["go", "went", "going", "goes"],
-    "correct_answer": "went",
-    "explanation": "Use past simple for completed actions.",
+    "question": "Complete the sentence: ...",
+    "options": ["plausible option", "plausible option", "plausible option", "plausible option"],
+    "correct_answer": "the correct option (must match one option exactly)",
+    "explanation": "Short explanation that teaches the rule, not just the answer.",
     "points": 10
   }}
 ]
 
-Make questions appropriate for {level} level. Be concise."""
+Vary which grammar structures the items target across the {count}
+questions (tenses, articles, prepositions, modals, etc., picked from
+the CEFR spec for this level). Distractors must reflect common
+{level}-level learner mistakes, not random words."""
 
         if ai_service.gemini_model:
+            # 2026-05-13: timeout bumped from 15→45s. ai_service.gemini_model
+            # now uses gemini-2.5-pro (CONTENT tier) instead of flash-lite,
+            # which produces much higher-quality multi-paragraph output but
+            # can take 10-20 s for longer reading passages at higher CEFR
+            # levels. 15 s was timing out and falling back to nothing.
             response = await asyncio.wait_for(
                 asyncio.to_thread(ai_service.gemini_model.generate_content, prompt),
-                timeout=15.0  # 15 second timeout for fast response
+                timeout=45.0,
             )
             
             content = response.text.strip()

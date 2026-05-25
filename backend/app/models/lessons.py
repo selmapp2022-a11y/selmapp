@@ -5,6 +5,18 @@ from enum import Enum as PyEnum
 
 from app.core.database import Base
 
+
+def _current_content_version() -> str:
+    """Read the current content-generation version on demand.
+
+    Imported lazily inside the helper so this module doesn't pull
+    ``app.services.content_cache_service`` at import time (the services
+    layer in turn imports models, so an eager import here would cycle).
+    """
+    from app.services.content_cache_service import CONTENT_GENERATION_VERSION
+    return CONTENT_GENERATION_VERSION
+
+
 class LessonType(str, PyEnum):
     CONVERSATION = "conversation"
     WRITING = "writing"
@@ -47,7 +59,15 @@ class AIGeneratedLesson(Base):
 
     # Metadata
     generated_by = Column(String(50), default="ai")  # ai, system, manual
-    version = Column(String(20), default="1.0")
+    # 2026-05-13: ``version`` now mirrors CONTENT_GENERATION_VERSION at
+    # insert time so we can invalidate every old lesson by bumping that
+    # single constant. ``crud.lessons.get_cached_lesson`` filters by
+    # this value, so a code-level prompt change reaches the iPhone on
+    # next request without us having to TRUNCATE the table.
+    #
+    # The default uses a callable + lazy import so we avoid a
+    # services → models import cycle at module load.
+    version = Column(String(20), default=lambda: _current_content_version())
     tags = Column(JSON, default=list)  # Search tags
 
     # Performance tracking

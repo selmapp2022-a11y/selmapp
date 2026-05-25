@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import List, Optional
+from urllib.parse import unquote
 import secrets
 
 class Settings(BaseSettings):
@@ -35,11 +37,6 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_SECRET: Optional[str] = None
     FACEBOOK_CLIENT_ID: Optional[str] = None
     FACEBOOK_CLIENT_SECRET: Optional[str] = None
-    # Native sign-in (mobile) audience whitelist
-    APPLE_BUNDLE_ID: Optional[str] = None  # e.g. com.selmapp.app (iOS aud)
-    APPLE_SERVICE_ID: Optional[str] = None  # web/Android aud (services id)
-    GOOGLE_IOS_CLIENT_ID: Optional[str] = None
-    GOOGLE_ANDROID_CLIENT_ID: Optional[str] = None
     OAUTH_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/callback"
     
     # PayPal Settings
@@ -47,12 +44,6 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_SECRET: Optional[str] = None
     PAYPAL_MODE: str = "sandbox"  # "sandbox" or "live"
     PAYPAL_WEBHOOK_ID: Optional[str] = None
-
-    # RevenueCat — webhook auth header value (free-form bearer token set in
-    # the RevenueCat dashboard; we compare equality on incoming requests).
-    REVENUECAT_WEBHOOK_AUTH: Optional[str] = None
-    # Default trial length when a new subscription is created without one.
-    SELM_DEFAULT_TRIAL_DAYS: int = 3
     
     # Payment Settings
     PAYMENT_CURRENCY: str = "USD"
@@ -68,7 +59,24 @@ class Settings(BaseSettings):
     GOOGLE_GEMINI_API_KEY: Optional[str] = None
     GOOGLE_CLOUD_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    # Three Gemini tiers explicitly distinguished by use case:
+    #   FAST    — flash-lite. Used for fast, low-stakes interactive
+    #             feedback (e.g. confirming a grammar answer). Cheap.
+    #   CONTENT — pro. Used for everything the LEARNER reads or hears:
+    #             reading passages, listening dialogues, exercises,
+    #             vocab explanations, conversation practice. The
+    #             quality jump from flash-lite → pro is large for
+    #             multi-paragraph generation. Ebrahim explicitly
+    #             approved the cost trade-off 2026-05-13.
+    #   REASON  — pro. Heavier reasoning: assessment scoring, level
+    #             determination, learner-profile analysis.
     GEMINI_TEXT_MODEL_FAST: str = "gemini-2.5-flash-lite"
+    # New middle tier (2026-05-13 late): full flash for speed-sensitive
+    # paths that still need decent prose — listening dialogue scripts
+    # in particular, where pro takes 15-30 s for a 12-turn dialogue and
+    # makes the iPhone wait too long. Falls between flash-lite and pro.
+    GEMINI_TEXT_MODEL_DIALOGUE: str = "gemini-2.5-flash"
+    GEMINI_TEXT_MODEL_CONTENT: str = "gemini-2.5-pro"
     GEMINI_TEXT_MODEL_REASON: str = "gemini-2.5-pro"
     # Use Gemini TTS preview model for speech synthesis
     # Note: gemini-2.5-flash-preview-tts supports generateContent with AUDIO modality
@@ -76,23 +84,43 @@ class Settings(BaseSettings):
     GEMINI_SPEECH_MODEL: str = "gemini-2.5-flash-preview-tts"
     # Preferred TTS voice
     GEMINI_TTS_VOICE: Optional[str] = "Kore"
-    # TTS provider selection: "elevenlabs" or "gemini" (default keeps current behavior)
-    TTS_PROVIDER: str = "gemini"
-    # ElevenLabs TTS configuration
-    ELEVENLABS_API_KEY: Optional[str] = None
-    ELEVENLABS_MODEL_ID: str = "eleven_turbo_v2_5"
-    # Voice IDs (override per-deployment to change defaults)
-    ELEVENLABS_VOICE_ID_AMERICAN: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah
-    ELEVENLABS_VOICE_ID_BRITISH: str = "XB0fDUnXU5powFXDhCwa"   # Charlotte
-    ELEVENLABS_DEFAULT_ACCENT: str = "american"  # "american" | "british"
     SPEAKING_PIPELINE: str = "stt_v2+gemini"
     GCP_PROJECT_ID: Optional[str] = None
     GCP_LOCATION: str = "global"
     ELSA_API_KEY: Optional[str] = None
     ELSA_API_BASE_URL: Optional[str] = None
     SPEECHACE_API_KEY: Optional[str] = None
+    # OPENAI_API_KEY removed 2026-05-08 — was declared but never imported.
+    # If you want to wire OpenAI as a Gemini fallback later, re-add here and
+    # in env.example, then add `import openai` to a service module.
+
+    # OpenAI TTS — primary provider as of 2026-05-13. ``gpt-4o-mini-tts``
+    # gives more natural English prosody than ElevenLabs turbo and
+    # supports a free-form ``instructions`` field for voice direction.
+    # Cost is also lower ($0.015/1K chars vs ElevenLabs $0.05/1K).
+    # Set OPENAI_API_KEY in env to activate; without it the factory
+    # falls back to ElevenLabs (or Gemini if that's also missing).
     OPENAI_API_KEY: Optional[str] = None
-    
+
+    # ElevenLabs TTS — secondary provider, used as fallback or when
+    # ``TTS_PROVIDER=elevenlabs``. See OPENAI_API_KEY above.
+    ELEVENLABS_API_KEY: Optional[str] = None
+    # Optional: pin a specific ElevenLabs voice across the app. If unset, the
+    # ElevenLabs service uses Rachel ("21m00Tcm4TlvDq8ikWAM") by default for
+    # solo narration and assigns gender-matched voices for multi-speaker
+    # listening dialogues automatically.
+    ELEVENLABS_VOICE_ID: Optional[str] = None
+    # TTS provider toggle. Options:
+    #   "openai"     — gpt-4o-mini-tts. Default as of 2026-05-13;
+    #                  best naturalness for English with voice
+    #                  direction via the ``instructions`` parameter.
+    #   "elevenlabs" — eleven_turbo_v2_5. Backup provider.
+    #   "gemini"     — Gemini native TTS. Last-resort fallback.
+    # The factory in gemini_tts_service.get_tts_service() picks the
+    # provider AND falls back automatically when the chosen provider's
+    # API key is missing — so a fresh dev env always produces audio.
+    TTS_PROVIDER: str = "openai"
+
     # File Storage
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
@@ -140,8 +168,29 @@ class Settings(BaseSettings):
     ADMIN_OWNER_PASSWORD: str = "ChangeMe!Owner2025"
     ADMIN_OWNER_USERNAME: str = "admin_owner"
     
+    # ── URL-decode keys that may have been pasted in encoded form ──
+    #
+    # Operators sometimes paste API keys into the DigitalOcean App
+    # Platform UI from an email or URL that already URL-encoded them
+    # (so `/` becomes `%2F`, `+` becomes `%2B`, etc.). When we then
+    # send that string back to the upstream API as a query parameter,
+    # aiohttp percent-encodes it a SECOND time (`%2F` → `%252F`), the
+    # upstream rejects the auth, and the app silently falls back to a
+    # weaker provider. This validator detects accidental encoding and
+    # restores the raw key so consumers don't have to know.
+    @field_validator("SPEECHACE_API_KEY", "ELEVENLABS_API_KEY", "GOOGLE_GEMINI_API_KEY", mode="before")
+    @classmethod
+    def _decode_percent_encoded_keys(cls, v):
+        if isinstance(v, str) and "%" in v:
+            decoded = unquote(v)
+            # Only adopt the decode if it actually changed something —
+            # avoids false positives on keys that legitimately use `%`.
+            if decoded != v:
+                return decoded
+        return v
+
     class Config:
         env_file = ".env"
         case_sensitive = True
 
-settings = Settings() 
+settings = Settings()

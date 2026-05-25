@@ -9,7 +9,9 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     current_level: UserLevel = UserLevel.A1
-    native_language: str = "Persian"
+    # native_language is optional and unset by default — SELM is global.
+    # Only stored when the user explicitly tells us.
+    native_language: Optional[str] = None
     target_language: str = "English"
     daily_goal_minutes: int = 30
     preferred_study_time: Optional[str] = None

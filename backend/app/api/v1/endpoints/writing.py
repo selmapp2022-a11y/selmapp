@@ -26,267 +26,9 @@ from app.schemas.writing import (
 from app.services.ai_service import AIService
 from datetime import datetime, timedelta
 import json
-from pydantic import BaseModel, Field
 
 router = APIRouter()
 ai_service = AIService()
-
-
-def _score_to_ielts_band(score_0_100: Optional[float]) -> Optional[float]:
-    """Map a 0-100 SELM/Gemini writing score onto an IELTS 0-9 band,
-    rounded to the nearest half-band as IELTS reports them.
-
-    The mapping is calibrated so that:
-      - 90+  → band 8.5-9
-      - 80   → band 7.5
-      - 70   → band 6.5
-      - 60   → band 5.5
-      - 50   → band 4.5
-      - 40   → band 3.5
-      - below 40 → bands 1-3
-
-    Used when the Gemini fallback path returns numeric scores and we
-    want to surface an IELTS-aligned band to the iPhone UI, matching
-    the SpeechAce premium path that returns the band natively.
-    (2026-05-25 — finding #6 from the 2026-05-24 audit.)
-    """
-    if score_0_100 is None:
-        return None
-    try:
-        s = max(0.0, min(100.0, float(score_0_100)))
-    except Exception:
-        return None
-    # 0-100 → 0-9 linear, then round to nearest 0.5
-    raw_band = (s / 100.0) * 9.0
-    rounded = round(raw_band * 2.0) / 2.0
-    return max(0.0, min(9.0, rounded))
-
-
-def _ielts_breakdown(scores: dict) -> dict:
-    """Return per-criterion IELTS band so the UI can render the four
-    standard IELTS Writing bands separately."""
-    return {
-        "task_response": _score_to_ielts_band(scores.get("task_achievement")),
-        "coherence_cohesion": _score_to_ielts_band(scores.get("coherence")),
-        "lexical_resource": _score_to_ielts_band(scores.get("vocabulary")),
-        "grammar_accuracy": _score_to_ielts_band(scores.get("grammar")),
-    }
-
-
-# ── IELTS Writing Task 1 / Task 2 ────────────────────────────────────────
-# Three task types are supported, matching the real IELTS exam structure:
-#   - ielts_task1_letter  → IELTS General Task 1: write a letter (formal,
-#                           semi-formal or informal) in 150 words / 20 min.
-#   - ielts_task1_chart   → IELTS Academic Task 1: describe a chart, graph,
-#                           table, map or diagram in 150 words / 20 min.
-#   - ielts_task2         → IELTS Task 2 (General or Academic): opinion /
-#                           discussion / problem-solution / advantages-
-#                           disadvantages essay in 250 words / 40 min.
-# (2026-05-25 — finding #4 from the 2026-05-24 audit.)
-
-IELTS_TASK_SPECS = {
-    "ielts_task1_letter": {
-        "name": "IELTS General Task 1 — Letter",
-        "word_count_target": "at least 150 words",
-        "time_limit_minutes": 20,
-        "scoring_weight": "33% of the total Writing band",
-        "generation_instructions": (
-            "Generate a realistic IELTS General Task 1 letter-writing prompt. "
-            "Pick ONE register: formal (e.g. complaint to a company, request "
-            "to a manager), semi-formal (e.g. landlord, school administrator), "
-            "or informal (e.g. friend, family member). Include three bullet "
-            "points the test-taker must address."
-        ),
-        "instructions_for_taker": (
-            "You should spend about 20 minutes on this task. Write at least "
-            "150 words. You do NOT need to include addresses. Begin your "
-            "letter as follows: 'Dear ...,'"
-        ),
-    },
-    "ielts_task1_chart": {
-        "name": "IELTS Academic Task 1 — Chart / Graph Description",
-        "word_count_target": "at least 150 words",
-        "time_limit_minutes": 20,
-        "scoring_weight": "33% of the total Writing band",
-        "generation_instructions": (
-            "Generate a realistic IELTS Academic Task 1 prompt. Describe a "
-            "specific chart, graph, table, map or diagram in text form "
-            "(since this is text-only, narrate the visual data clearly with "
-            "concrete numbers, categories, time periods and units). The "
-            "test-taker must summarise the information, select and report "
-            "the main features, and make comparisons where relevant."
-        ),
-        "instructions_for_taker": (
-            "You should spend about 20 minutes on this task. Summarise the "
-            "information by selecting and reporting the main features, and "
-            "make comparisons where relevant. Write at least 150 words."
-        ),
-    },
-    "ielts_task2": {
-        "name": "IELTS Task 2 — Essay",
-        "word_count_target": "at least 250 words",
-        "time_limit_minutes": 40,
-        "scoring_weight": "67% of the total Writing band",
-        "generation_instructions": (
-            "Generate a realistic IELTS Task 2 essay question. Pick ONE of "
-            "the four classic Task 2 types: (1) opinion (agree/disagree), "
-            "(2) discussion (discuss both views and give your opinion), "
-            "(3) problem-solution (causes and solutions), or "
-            "(4) advantages and disadvantages. Topic should be of broad, "
-            "current interest (education, technology, environment, health, "
-            "work, society, culture). Make the prompt thought-provoking, "
-            "not trivial."
-        ),
-        "instructions_for_taker": (
-            "You should spend about 40 minutes on this task. Write at least "
-            "250 words. Give reasons for your answer and include any "
-            "relevant examples from your own knowledge or experience."
-        ),
-    },
-}
-
-
-def _ielts_writing_rubric_block() -> str:
-    """The official-style IELTS Writing band descriptors, condensed
-    enough to fit in a Gemini prompt while preserving the four
-    criteria the markers actually use."""
-    return (
-        "Score against the official IELTS Writing band descriptors, "
-        "with four criteria (each scored on the IELTS 0-9 band scale, "
-        "then mapped to a 0-100 score for the JSON output):\n"
-        "  1. Task Achievement / Task Response — does the response fully "
-        "address every part of the prompt? Are the position and key ideas "
-        "clearly developed?\n"
-        "  2. Coherence and Cohesion — is the writing logically organised "
-        "into paragraphs? Are cohesive devices (linking words, referencing) "
-        "used naturally?\n"
-        "  3. Lexical Resource — is vocabulary varied, accurate, and used "
-        "with appropriate collocation? Any awkward or repetitive word choice?\n"
-        "  4. Grammatical Range and Accuracy — does the writer use a range "
-        "of sentence structures correctly? How frequent and serious are the "
-        "errors?\n"
-        "Reference bands: 9 = expert user, 8 = very good, 7 = good, "
-        "6 = competent, 5 = modest, 4 = limited, 3 = extremely limited."
-    )
-
-
-class GenerateIeltsTaskRequest(BaseModel):
-    task_type: str = Field(
-        ...,
-        description=(
-            "One of: ielts_task1_letter, ielts_task1_chart, ielts_task2"
-        ),
-    )
-    topic_hint: Optional[str] = Field(
-        default=None,
-        description="Optional theme to bias the generated prompt towards.",
-    )
-
-
-@router.post("/ielts/generate-task")
-async def generate_ielts_writing_task(
-    request: GenerateIeltsTaskRequest,
-    current_user: User = Depends(get_current_user),
-) -> Any:
-    """Return an IELTS-style writing prompt for one of the three task
-    types. The prompt itself is generated by Gemini at request time so
-    test-takers get a fresh question each session.
-    """
-    spec = IELTS_TASK_SPECS.get(request.task_type)
-    if spec is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Unknown task_type. Use one of: ielts_task1_letter, "
-                "ielts_task1_chart, ielts_task2."
-            ),
-        )
-
-    topic_hint_line = (
-        f"Theme hint (optional, weave in naturally): {request.topic_hint}\n"
-        if request.topic_hint
-        else ""
-    )
-    gemini_prompt = (
-        f"{spec['generation_instructions']}\n\n"
-        f"{topic_hint_line}"
-        "Reply ONLY with valid JSON of exactly this shape:\n"
-        "{\n"
-        '  "prompt_text": "the full task prompt the test-taker will see, '
-        'including any bullet points or chart description",\n'
-        '  "title": "a 3-7 word title summarising the prompt"\n'
-        "}"
-    )
-
-    prompt_text = ""
-    title = ""
-    try:
-        if ai_service.gemini_model:
-            import asyncio as _asyncio
-            import json as _json
-            resp = await _asyncio.wait_for(
-                _asyncio.to_thread(
-                    ai_service.gemini_model.generate_content, gemini_prompt
-                ),
-                timeout=25.0,
-            )
-            raw = (getattr(resp, "text", "") or "").strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw
-                raw = raw.rsplit("```", 1)[0].strip()
-            try:
-                data = _json.loads(raw)
-            except Exception:
-                import re as _re
-                m = _re.search(r"\{[\s\S]*\}", raw)
-                data = _json.loads(m.group(0)) if m else {}
-            prompt_text = (data.get("prompt_text") or "").strip()
-            title = (data.get("title") or "").strip()
-    except Exception:
-        # Generation failure → return a static safety prompt so the
-        # client never sees an empty body for an authenticated request.
-        prompt_text = ""
-
-    if not prompt_text:
-        # Static fallbacks per task type. Boring but valid.
-        prompt_text = {
-            "ielts_task1_letter": (
-                "You recently bought a household appliance, but it stopped "
-                "working soon after. Write a letter to the shop manager. "
-                "In your letter:\n"
-                "  - describe the product and when you bought it\n"
-                "  - explain what is wrong with it\n"
-                "  - say what you would like the shop to do"
-            ),
-            "ielts_task1_chart": (
-                "The chart shows household electricity consumption in three "
-                "countries (Country A, B and C) from 2010 to 2020, measured "
-                "in kilowatt-hours per household per year. Summarise the "
-                "information by selecting and reporting the main features, "
-                "and make comparisons where relevant."
-            ),
-            "ielts_task2": (
-                "Some people believe that universities should focus only on "
-                "providing students with knowledge directly related to their "
-                "future job. Others argue that universities should offer a "
-                "broad range of subjects. Discuss both views and give your "
-                "own opinion."
-            ),
-        }.get(request.task_type, "")
-        title = spec["name"]
-
-    return {
-        "success": True,
-        "task_type": request.task_type,
-        "task_name": spec["name"],
-        "title": title or spec["name"],
-        "prompt_text": prompt_text,
-        "instructions": spec["instructions_for_taker"],
-        "word_count_target": spec["word_count_target"],
-        "time_limit_minutes": spec["time_limit_minutes"],
-        "scoring_weight": spec["scoring_weight"],
-    }
-
 
 # Writing Prompt Endpoints
 @router.get("/prompts/", response_model=List[WritingPromptResponse])
@@ -783,15 +525,6 @@ async def assess_writing_direct(
     writing_type: str = Body(default="general"),
     user_level: str = Body(default=None),
     prompt: str = Body(default=""),
-    task_type: str = Body(
-        default="general",
-        description=(
-            "Optional. When set to one of ielts_task1_letter, "
-            "ielts_task1_chart, ielts_task2 the grading rubric is the "
-            "official IELTS Writing band descriptors (4 criteria, 0-9 "
-            "bands) instead of the generic SELM rubric."
-        ),
-    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -801,13 +534,7 @@ async def assess_writing_direct(
     `prompt` is the original task the user was given (e.g. "Write a cover
     letter for a software engineer position"). When supplied, the AI grades
     Task Achievement against the prompt instead of giving generic feedback.
-
-    `task_type` opts into IELTS Writing band scoring. When IELTS is
-    selected, the Gemini fallback path uses the official band descriptors
-    and the response always includes ``ielts_band`` + ``ielts_breakdown``.
-    (2026-05-25 — finding #4 from the 2026-05-24 audit.)
     """
-    is_ielts = task_type in IELTS_TASK_SPECS
     try:
         # Use user's level if not provided
         level = user_level or (current_user.current_level.value if current_user.current_level else "B1")
@@ -840,27 +567,17 @@ async def assess_writing_direct(
                     return None
 
             # Map SpeechAce 0-100 scale into the same fields the UI expects.
-            sa_scores = {
-                "overall": int(_f(sa_score, "overall") or 0),
-                "grammar": int(_f(sa_score, "grammar") or 0),
-                "vocabulary": int(_f(sa_score, "vocab") or 0),
-                "coherence": int(_f(sa_score, "coherence") or 0),
-                "task_achievement": int(_f(sa_score, "relevance") or 0),
-            }
-            sa_ielts_breakdown = {
-                # Prefer SpeechAce's own per-criterion IELTS bands when
-                # available, otherwise derive them from the 0-100 scores.
-                "task_response": _f(ielts, "relevance") or _score_to_ielts_band(sa_scores["task_achievement"]),
-                "coherence_cohesion": _f(ielts, "coherence") or _score_to_ielts_band(sa_scores["coherence"]),
-                "lexical_resource": _f(ielts, "vocab") or _score_to_ielts_band(sa_scores["vocabulary"]),
-                "grammar_accuracy": _f(ielts, "grammar") or _score_to_ielts_band(sa_scores["grammar"]),
-            }
             return {
                 "success": True,
                 "assessment": {
-                    "scores": sa_scores,
-                    "ielts_band": _f(ielts, "overall") or _score_to_ielts_band(sa_scores["overall"]),
-                    "ielts_breakdown": sa_ielts_breakdown,
+                    "scores": {
+                        "overall": int(_f(sa_score, "overall") or 0),
+                        "grammar": int(_f(sa_score, "grammar") or 0),
+                        "vocabulary": int(_f(sa_score, "vocab") or 0),
+                        "coherence": int(_f(sa_score, "coherence") or 0),
+                        "task_achievement": int(_f(sa_score, "relevance") or 0),
+                    },
+                    "ielts_band": _f(ielts, "overall"),
                     "feedback": ts.get("feedback_text") or "Detailed scores from SpeechAce. Review the highlights below.",
                     "strengths": ts.get("strengths") or [],
                     "weaknesses": ts.get("weaknesses") or [],
@@ -877,47 +594,30 @@ async def assess_writing_direct(
                     "writing_type": writing_type,
                     "user_level": level,
                     "scorer": "speechace_premium",
-                    "task_type": task_type,
                 },
             }
 
         # Fallback: Gemini-based assessment (the previous default).
-        # When IELTS task_type is set, prefix the prompt with the
-        # official IELTS Writing band descriptors so Gemini grades
-        # against the same four criteria human IELTS markers use.
-        effective_prompt = prompt
-        if is_ielts:
-            spec = IELTS_TASK_SPECS[task_type]
-            ielts_header = (
-                f"This is an IELTS Writing exam answer for {spec['name']} "
-                f"({spec['word_count_target']}, {spec['time_limit_minutes']} "
-                f"minutes, worth {spec['scoring_weight']}).\n\n"
-                f"{_ielts_writing_rubric_block()}\n\n"
-                f"Original task prompt: {prompt or '(not supplied)'}"
-            )
-            effective_prompt = ielts_header
         ai_result = await ai_service.assess_writing(
             text=text,
             writing_type=writing_type,
             user_level=level,
-            task_prompt=effective_prompt,
+            task_prompt=prompt,
         )
         
         if ai_result.get('success'):
             assessment = ai_result.get('content', {})
-            gemini_scores = {
-                "overall": assessment.get('overall_score', 70),
-                "grammar": assessment.get('grammar_score', 70),
-                "vocabulary": assessment.get('vocabulary_score', 70),
-                "coherence": assessment.get('coherence_score', 70),
-                "task_achievement": assessment.get('task_achievement_score', 70),
-            }
+            
             return {
                 "success": True,
                 "assessment": {
-                    "scores": gemini_scores,
-                    "ielts_band": _score_to_ielts_band(gemini_scores["overall"]),
-                    "ielts_breakdown": _ielts_breakdown(gemini_scores),
+                    "scores": {
+                        "overall": assessment.get('overall_score', 70),
+                        "grammar": assessment.get('grammar_score', 70),
+                        "vocabulary": assessment.get('vocabulary_score', 70),
+                        "coherence": assessment.get('coherence_score', 70),
+                        "task_achievement": assessment.get('task_achievement_score', 70)
+                    },
                     "feedback": assessment.get('feedback', 'Good effort! Keep practicing.'),
                     "strengths": assessment.get('strengths', []),
                     "weaknesses": assessment.get('weaknesses', []),
@@ -932,23 +632,21 @@ async def assess_writing_direct(
                     "word_count": len(text.split()),
                     "character_count": len(text),
                     "writing_type": writing_type,
-                    "user_level": level,
-                    "scorer": "gemini",
-                    "task_type": task_type,
+                    "user_level": level
                 }
             }
         else:
             # Fallback response
-            fb_scores = {
-                "overall": 70, "grammar": 70, "vocabulary": 70,
-                "coherence": 70, "task_achievement": 70,
-            }
             return {
                 "success": True,
                 "assessment": {
-                    "scores": fb_scores,
-                    "ielts_band": _score_to_ielts_band(fb_scores["overall"]),
-                    "ielts_breakdown": _ielts_breakdown(fb_scores),
+                    "scores": {
+                        "overall": 70,
+                        "grammar": 70,
+                        "vocabulary": 70,
+                        "coherence": 70,
+                        "task_achievement": 70
+                    },
                     "feedback": "Your writing shows good effort. Continue practicing to improve your skills.",
                     "strengths": ["Good attempt at expressing ideas"],
                     "weaknesses": [],
@@ -966,24 +664,22 @@ async def assess_writing_direct(
                     "word_count": len(text.split()),
                     "character_count": len(text),
                     "writing_type": writing_type,
-                    "user_level": level,
-                    "scorer": "fallback",
-                    "task_type": task_type,
+                    "user_level": level
                 }
             }
             
     except Exception as e:
-        ex_scores = {
-            "overall": 70, "grammar": 70, "vocabulary": 70,
-            "coherence": 70, "task_achievement": 70,
-        }
         return {
             "success": False,
             "error": str(e),
             "assessment": {
-                "scores": ex_scores,
-                "ielts_band": _score_to_ielts_band(ex_scores["overall"]),
-                "ielts_breakdown": _ielts_breakdown(ex_scores),
+                "scores": {
+                    "overall": 70,
+                    "grammar": 70,
+                    "vocabulary": 70,
+                    "coherence": 70,
+                    "task_achievement": 70
+                },
                 "feedback": "Your writing has been received. Keep practicing!",
                 "strengths": [],
                 "weaknesses": [],
@@ -998,9 +694,7 @@ async def assess_writing_direct(
                 "word_count": len(text.split()),
                 "character_count": len(text),
                 "writing_type": writing_type,
-                "user_level": user_level or "B1",
-                "scorer": "error_fallback",
-                "task_type": task_type,
+                "user_level": user_level or "B1"
             }
         }
 

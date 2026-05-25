@@ -989,7 +989,38 @@ class ContentGenerationWorkflow:
         user_context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Generate a single piece of content with full context"""
-        
+
+        # Enrich the per-piece user_context with the learner's currently-
+        # active weaknesses so downstream prompt builders can target them.
+        # Filter to the error_type most relevant for the piece — e.g. a
+        # grammar exercise should not be biased by the user's vocabulary
+        # weaknesses. Falls back to "all weaknesses" if no clean mapping.
+        try:
+            from app.services.learner_profile_service import (
+                build_weakness_prompt_block,
+            )
+            type_filter = {
+                "grammar": "grammar",
+                "vocabulary": "vocabulary",
+                "writing": None,        # writing benefits from all rule types
+                "speaking": "pronunciation",
+                "reading": None,
+                "listening": None,
+            }.get(content_type)
+            weakness_block = await build_weakness_prompt_block(
+                db, user_id=user.id, error_type=type_filter, limit=5
+            )
+            if weakness_block:
+                # Available to any downstream generator that knows the key.
+                user_context = {
+                    **user_context,
+                    "active_weaknesses_block": weakness_block,
+                }
+        except Exception as wexc:  # noqa: BLE001 — never fail content gen
+            logger.warning(
+                "Weakness injection skipped (non-fatal): %s", wexc
+            )
+
         try:
             if content_type == "reading":
                 return await self._generate_contextual_reading(db, user, topic, user_context)
@@ -1266,8 +1297,19 @@ class ContentGenerationWorkflow:
                     return {"success": True, "content": cached0.content}
 
             try:
+                # If the learner has active grammar weaknesses, weave them
+                # into the topic string so the AI exercise generator builds
+                # questions that deliberately exercise those patterns.
+                weakness_block = user_context.get("active_weaknesses_block")
+                enriched_topic = topic
+                if weakness_block:
+                    enriched_topic = (
+                        f"{topic}\n\n{weakness_block}\n\n"
+                        "When generating exercises, ensure at least 2 of the "
+                        "5 questions target one of the active weaknesses above."
+                    )
                 result = await self.ai_service.generate_exercise_content(
-                    topic=topic,
+                    topic=enriched_topic,
                     difficulty_level=user.current_level.value,
                     exercise_type="grammar",
                     count=5

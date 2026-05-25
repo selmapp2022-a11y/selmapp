@@ -26,46 +26,6 @@ from app.services.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 
-
-def _parse_script_into_turns(script: str, speaker_names: List[str]) -> List[Dict[str, str]]:
-    """Parse a generated dialogue script into ordered (speaker, text) turns.
-
-    Accepts lines in either of these formats (LLM output may vary):
-        [Speaker Name]: dialogue text
-        Speaker Name: dialogue text
-
-    Lines that don't match a known speaker are appended to the most recent
-    turn so we don't drop content.
-    """
-    import re
-
-    if not script:
-        return []
-    known = [s for s in (speaker_names or []) if isinstance(s, str) and s.strip()]
-    # Match optional leading bracket, then name, then colon.
-    name_re = re.compile(r"^\s*\[?\s*([^\[\]:]{1,60}?)\s*\]?\s*:\s*(.+?)\s*$")
-    turns: List[Dict[str, str]] = []
-    for raw in script.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        m = name_re.match(line)
-        if m:
-            speaker_raw = m.group(1).strip()
-            text = m.group(2).strip()
-            # Resolve to a known speaker name when possible (case-insensitive).
-            resolved = next(
-                (k for k in known if k.lower() == speaker_raw.lower()),
-                speaker_raw,
-            )
-            turns.append({"speaker": resolved, "text": text})
-        elif turns:
-            turns[-1]["text"] = (turns[-1]["text"] + " " + line).strip()
-        else:
-            turns.append({"speaker": (known[0] if known else "Speaker"), "text": line})
-    return turns
-
-
 # Global singleton instance for thread-safe reuse
 _tts_service_instance: Optional["GeminiTTSService"] = None
 _tts_service_lock: Optional[asyncio.Lock] = None
@@ -95,13 +55,25 @@ class GeminiTTSService:
                 self._genai_client = genai_client.Client(api_key=api_key)
                 logger.info("Google GenAI client initialized for Gemini native audio TTS")
             else:
-                # Fallback to google-generativeai for text generation
+                # Fallback to google-generativeai for text generation.
+                # 2026-05-13 (late): use DIALOGUE tier (flash) for
+                # listening scripts — pro was making the iPhone wait
+                # 30 s, flash returns in 3-6 s with quality that's
+                # well above flash-lite. The right trade-off for
+                # dialogue where structure matters more than nuance.
                 genai.configure(api_key=api_key)
+                dialogue_name = (
+                    getattr(settings, "GEMINI_TEXT_MODEL_DIALOGUE", None)
+                    or getattr(settings, "GEMINI_TEXT_MODEL_FAST", "gemini-2.5-flash-lite")
+                )
                 try:
-                    self._text_model = genai.GenerativeModel(settings.GEMINI_TEXT_MODEL_FAST)
+                    self._text_model = genai.GenerativeModel(dialogue_name)
                 except Exception:
                     self._text_model = None
-                logger.info("google-generativeai configured (fallback mode for scripts)")
+                logger.info(
+                    "google-generativeai configured (script-gen fallback) model=%s",
+                    dialogue_name,
+                )
         except Exception as e:
             logger.error(f"Failed to initialize GenAI clients: {e}")
             self._genai_client = None
@@ -120,11 +92,7 @@ class GeminiTTSService:
         voice_settings: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Generate audio content using the configured TTS provider.
-
-        When ``settings.TTS_PROVIDER == "elevenlabs"`` this delegates to
-        ElevenLabsTTSService. If ElevenLabs returns a non-fatal error
-        and ``fallback_available`` is True, it falls back to Gemini.
+        Generate audio content using Gemini native audio model.
 
         Args:
             text: The text to convert to speech
@@ -135,27 +103,6 @@ class GeminiTTSService:
         Returns:
             Dict containing audio data and metadata
         """
-        provider = (getattr(settings, "TTS_PROVIDER", "gemini") or "gemini").lower()
-        if provider == "elevenlabs":
-            try:
-                from app.services.elevenlabs_tts_service import get_elevenlabs_tts_service
-                el = await get_elevenlabs_tts_service()
-                el_result = await el.generate_audio_content(
-                    text=text,
-                    audio_type=audio_type,
-                    speaker_config=speaker_config,
-                    voice_settings=voice_settings,
-                )
-                if el_result.get("success"):
-                    return el_result
-                if not el_result.get("fallback_available"):
-                    return el_result
-                logger.warning(
-                    f"ElevenLabs TTS failed, falling back to Gemini: {el_result.get('error')}"
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"ElevenLabs dispatch failed, falling back to Gemini: {e}")
-
         try:
             # Generate unique filename with UUID to prevent collisions in concurrent requests
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -308,8 +255,7 @@ class GeminiTTSService:
         topic: str,
         difficulty_level: str,
         content_type: str = "conversation",
-        speaker_names: Optional[List[str]] = None,
-        accent: Optional[str] = None,
+        speaker_names: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Generate listening content with appropriate script and audio.
@@ -338,58 +284,12 @@ class GeminiTTSService:
             script = script_result["script"]
             speakers = script_result["speakers"]
 
-            # Tag every speaker with the requested accent so the TTS provider
-            # (ElevenLabs) can resolve American/British voices.
-            accent_norm = (accent or "").strip().lower() or None
-            if accent_norm and speakers:
-                speakers = [
-                    {**(s if isinstance(s, dict) else {"name": str(s)}), "accent": accent_norm}
-                    for s in speakers
-                ]
-
-            # For multi-speaker formats (conversation/interview) on ElevenLabs,
-            # synthesize each turn with a distinct voice (female + male) and
-            # concatenate. This produces a dialogue with two recognizable voices
-            # instead of a single voice reading both sides.
-            audio_result: Optional[Dict[str, Any]] = None
-            provider_pref = (getattr(settings, "TTS_PROVIDER", "gemini") or "gemini").lower()
-            if (
-                provider_pref == "elevenlabs"
-                and content_type in ("conversation", "interview")
-            ):
-                turns = _parse_script_into_turns(script, speaker_names)
-                if turns and len({t["speaker"] for t in turns}) >= 2:
-                    try:
-                        from app.services.elevenlabs_tts_service import (
-                            get_elevenlabs_tts_service,
-                        )
-                        el = await get_elevenlabs_tts_service()
-                        multi_result = await el.generate_multi_speaker_audio(
-                            turns=turns,
-                            audio_type=content_type,
-                            accent=(accent_norm or "american"),
-                            voice_settings=None,
-                        )
-                        if multi_result.get("success"):
-                            audio_result = multi_result
-                        else:
-                            logger.warning(
-                                "Multi-speaker ElevenLabs failed, falling back to "
-                                f"single-voice: {multi_result.get('error')}"
-                            )
-                    except Exception as e:  # noqa: BLE001
-                        logger.error(
-                            f"Multi-speaker dispatch failed, falling back: {e}"
-                        )
-
-            # Single-voice path (or fallback): generate as one block.
-            if audio_result is None:
-                audio_result = await self.generate_audio_content(
-                    text=script,
-                    audio_type=content_type,
-                    speaker_config=speakers,
-                    voice_settings={"accent": accent_norm} if accent_norm else None,
-                )
+            # Generate audio using Gemini TTS
+            audio_result = await self.generate_audio_content(
+                text=script,
+                audio_type=content_type,
+                speaker_config=speakers
+            )
 
             if not audio_result["success"]:
                 return audio_result
@@ -430,18 +330,6 @@ class GeminiTTSService:
                     })
                 return normalized
 
-            # Echo provider/accent/voice from the underlying TTS so clients can
-            # show the right label (e.g. "British accent — Charlotte").
-            _provider = audio_result.get("provider") or (
-                "elevenlabs" if str(audio_result.get("tts_model", "")).startswith("eleven") else "gemini"
-            )
-            _voice = (
-                audio_result.get("voice")
-                or audio_result.get("voice_name")
-                or (speakers[0].get("voice_name") if speakers and isinstance(speakers[0], dict) else None)
-            )
-            _accent = audio_result.get("accent") or accent_norm
-
             return {
                 "success": True,
                 "topic": topic,
@@ -452,19 +340,13 @@ class GeminiTTSService:
                 "audio_url": audio_result["audio_url"],
                 "audio_data": audio_result["audio_data"],
                 "duration_seconds": audio_result["duration_seconds"],
-                "audio_provider": _provider,
-                "accent": _accent,
-                "voice": _voice,
                 "comprehension_questions": _normalize_questions(script_result.get("comprehension_questions", [])),
                 "vocabulary_focus": script_result.get("vocabulary_focus", []),
                 "metadata": {
-                    "tts_model": audio_result.get("tts_model") or settings.GEMINI_SPEECH_MODEL,
+                    "tts_model": settings.GEMINI_SPEECH_MODEL,
                     "generated_at": datetime.utcnow().isoformat(),
                     "speaker_count": len(speakers),
-                    "api": audio_result.get("api") or "google-genai",
-                    "provider": _provider,
-                    "accent": _accent,
-                    "voice": _voice,
+                    "api": "google-genai"
                 }
             }
 
@@ -482,119 +364,120 @@ class GeminiTTSService:
         content_type: str,
         speaker_names: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Generate an appropriate script for the listening content"""
+        """Generate an appropriate script for the listening content.
 
-        # Adjust script complexity based on CEFR level
+        2026-05-13: listening is now ALWAYS multi-speaker (2 or 3
+        people) regardless of content_type unless the caller explicitly
+        provides a single speaker_name. Ebrahim asked for genuine
+        conversations, not narrated monologues. Speaker identities,
+        relationship, tension, scene and place come from
+        ``dialogue_seed()`` so two listening exercises about the same
+        topic never feel like the same recording.
+        """
+        from app.services.prompt_library import (
+            cefr_block,
+            dialogue_seed,
+            render_dialogue_brief,
+            HUMAN_VOICE_RULES,
+            NAMES_F,
+            NAMES_M,
+        )
+        import random as _random
+
+        # Adjust script complexity based on difficulty level.
+        # 2026-05-13: bumped meaningfully so listening dialogues have
+        # room for a real exchange (turn → reaction → development →
+        # resolution). Previous targets produced exchanges that ended
+        # before either speaker had built any momentum.
         length_guide = {
-            "A1": "60-90 words",
-            "A2": "90-140 words",
-            "B1": "140-200 words",
-            "B2": "200-260 words",
-            "C1": "260-320 words",
-            "C2": "320-400 words",
+            "A1": "90-130 words",
+            "A2": "140-200 words",
+            "B1": "220-310 words",
+            "B2": "320-450 words",
+            "C1": "470-620 words",
+            "C2": "650-850 words",
         }
 
-        # Per-level CEFR guidance — what learners can do, sentence shape,
-        # vocabulary band, tense range, and target question depth.
-        cefr_guidance = {
-            "A1": (
-                "Use only the most basic everyday words (family, food, numbers, "
-                "days, common verbs). Short, simple sentences (5-9 words), "
-                "present simple, present continuous, simple imperatives. "
-                "Speakers should pause between ideas. No idioms, no phrasal verbs. "
-                "Questions should be literal recall (who/what/where/when)."
-            ),
-            "A2": (
-                "Use frequent, concrete vocabulary about routines, work, study, "
-                "shopping, travel. Short to medium sentences (8-14 words). "
-                "Past simple, near future ('going to'), can/can't, basic comparatives. "
-                "1-2 simple connectors (and, but, because). Questions test "
-                "main ideas plus one obvious detail."
-            ),
-            "B1": (
-                "Topic-relevant intermediate vocabulary; allow 2-3 mid-frequency "
-                "words explained in context. Mixed sentence lengths (10-18 words). "
-                "Present perfect, past continuous, first conditional, common "
-                "modals (should, might, have to). Use natural connectors "
-                "(however, although, so, then). Questions test main idea, "
-                "supporting detail, and one inference."
-            ),
-            "B2": (
-                "Independent-user vocabulary including some abstract terms and "
-                "collocations. Sentence length 14-22 words with subordinate "
-                "clauses. Second/third conditional, present/past perfect, "
-                "passive voice, reported speech. Include opinion/attitude markers "
-                "('it seems', 'apparently'). Questions probe attitude, gist, "
-                "specific information, and inference from tone."
-            ),
-            "C1": (
-                "Advanced vocabulary, common idioms, varied collocations, formal "
-                "and neutral register. Long, complex sentences with embedded "
-                "clauses. Full range of tenses, mixed conditionals, inversion "
-                "for emphasis. Speakers signal stance and concession naturally. "
-                "Questions cover implication, speaker purpose, register shifts, "
-                "and synthesis across the text."
-            ),
-            "C2": (
-                "Proficient vocabulary including low-frequency, idiomatic, and "
-                "domain-specific terms; nuance, irony, and connotation expected. "
-                "Sophisticated syntax: cleft sentences, fronting, ellipsis, "
-                "discourse markers. Cohesive, near-native flow. Questions test "
-                "subtle implication, rhetorical strategy, evaluative judgment, "
-                "and recognition of bias or stance."
-            ),
-        }
+        # Pick a fresh dialogue brief (international speakers, varied
+        # relationship + tension + scene) so listening exercises never
+        # feel like the same recording with different vocabulary.
+        d_seed = dialogue_seed()
+        d_brief = render_dialogue_brief(d_seed)
 
-        level_key = (difficulty_level or "B1").upper()
-        level_guidance = cefr_guidance.get(level_key, cefr_guidance["B1"])
-        target_length = length_guide.get(level_key, "140-200 words")
+        # Decide speaker count + names. If the caller passed names, honour them.
+        # Otherwise default to 2 speakers from the seed, or 3 if content_type
+        # hints at it (e.g. group conversation). Single-narrator only when
+        # caller forces it via speaker_names=["Narrator"].
+        if speaker_names:
+            speakers_for_prompt = speaker_names
+        else:
+            base = [d_seed["speaker_a_name"], d_seed["speaker_b_name"]]
+            # 25% chance of a third speaker for richer group dynamics —
+            # picked separately so we don't repeat A or B.
+            if _random.random() < 0.25:
+                pool = NAMES_F + NAMES_M
+                third = next((n for n in _random.sample(pool, len(pool)) if n not in base), None)
+                if third:
+                    base.append(third)
+            speakers_for_prompt = base
 
-        # Set default speaker names based on content type
-        if not speaker_names:
-            if content_type == "conversation":
-                speaker_names = ["Dr. Anya", "Liam"]
-            elif content_type == "interview":
-                speaker_names = ["Interviewer", "Expert"]
-            else:
-                speaker_names = ["Narrator"]
+        # Generate script prompt
+        speakers_block = ", ".join(speakers_for_prompt)
 
-        prompt = f"""You are a CEFR-aligned English-listening content writer for SELM, an AI English-learning platform for any English learner worldwide.
+        prompt = f"""Write a {length_guide.get(difficulty_level, "140-200 words")} listening-practice script — a multi-speaker conversation about "{topic}".
 
-Generate a {target_length} {content_type} about "{topic}" calibrated to CEFR level {level_key}.
+{cefr_block(difficulty_level)}
 
-Speakers: {', '.join(speaker_names)}
+{HUMAN_VOICE_RULES}
 
-CEFR {level_key} requirements:
-{level_guidance}
+{d_brief}
 
-Universal rules:
-- Natural spoken English, not written prose. Use contractions where appropriate.
-- Avoid culturally narrow references; keep examples globally accessible.
-- Do NOT use any non-English text. Output English only.
-- Do NOT include translations, transliterations, or glosses inside the script.
-- 4 multiple-choice comprehension questions, each with 4 plausible options and exactly one correct answer.
-- Vocabulary list of 4-6 useful items from the script, each with a short, level-appropriate English definition.
+SPEAKER ROSTER
+  Use these exact names, in this order, for all dialogue lines:
+  {speakers_block}
 
-Output Format (use these exact section markers):
+MULTI-SPEAKER REQUIREMENTS — MANDATORY
+  • The script MUST be a genuine back-and-forth conversation with at
+    least 2 speakers. Do NOT write a monologue with one speaker doing
+    all the talking.
+  • Every speaker named above must speak multiple times. No speaker
+    should have a single line.
+  • Turns should feel natural — short reactions, interruptions, follow-up
+    questions, brief agreement or disagreement, the occasional
+    "yeah" / "right" / "huh" / "I see" at the level allowed.
+  • Each speaker should sound distinct (different sentence length,
+    different vocabulary habits, different reactive patterns).
+
+SUBSTANTIVE DEPTH — non-negotiable
+  • Use the FULL word count from the level guide above. A short
+    dialogue that wraps up in 4 turns is failure even if it's "natural".
+  • The conversation should develop: opening situation → small
+    complication → exchange of perspectives → some resolution or
+    deepening. Don't end before both speakers have built momentum.
+  • Anchor exchanges in concrete specifics (a name, a place, a thing
+    one of them owns or does) — vague chit-chat at any length is filler.
+
+Output Format — follow exactly so the parser can read it:
 [SCRIPT START]
-[Speaker Name]: Dialogue line
-...
+{speakers_for_prompt[0]}: First line of dialogue.
+{speakers_for_prompt[1] if len(speakers_for_prompt) > 1 else speakers_for_prompt[0]}: Response line.
+... (continue alternating; every speaker speaks multiple times) ...
 [SCRIPT END]
 
 [QUESTIONS START]
 [
   {{
-    "question": "Question text here?",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "correct_answer": "Option A",
-    "explanation": "Why this is correct, in one short sentence."
+    "question": "Question text testing understanding of the conversation?",
+    "options": ["A", "B", "C", "D"],
+    "correct_answer": "A",
+    "explanation": "Why this is correct, with reference to what was said."
   }}
 ]
 [QUESTIONS END]
 
 [VOCABULARY START]
-- word1: short definition
-- word2: short definition
+- word1: short level-appropriate definition
+- word2: short level-appropriate definition
 [VOCABULARY END]
 """
 
@@ -602,9 +485,20 @@ Output Format (use these exact section markers):
             # Generate the script using preferred client
             script_text = ""
             if self._genai_client is not None:
-                # Use a supported text model name for v1beta; adjust if needed
+                # 2026-05-13 (late): use DIALOGUE tier (flash) instead
+                # of CONTENT (pro). On iPhone, pro was taking 15-30s
+                # for a typical 12-turn dialogue script, which pushed
+                # total listening load time past 60s when combined with
+                # TTS. Flash returns in 3-6s with quality that's still
+                # well above flash-lite, which is the right trade-off
+                # for dialogue scripts (structure matters more than
+                # prose nuance here).
+                script_model_name = (
+                    getattr(settings, "GEMINI_TEXT_MODEL_DIALOGUE", None)
+                    or getattr(settings, "GEMINI_TEXT_MODEL_FAST", "gemini-2.5-flash-lite")
+                )
                 resp = self._genai_client.models.generate_content(
-                    model=settings.GEMINI_TEXT_MODEL_FAST,
+                    model=script_model_name,
                     contents=prompt,
                 )
                 # google.genai returns a response with .text
@@ -625,13 +519,40 @@ Output Format (use these exact section markers):
             else:
                 raise RuntimeError("No GenAI client available for script generation")
 
-            # Parse the script and extract components
-            parsed_result = self._parse_generated_script(script_text, speaker_names)
+            # Parse the script using the ACTUAL roster (speakers_for_prompt),
+            # not the original `speaker_names` parameter — that's often None
+            # when the caller relies on our auto-rostering.
+            parsed_result = self._parse_generated_script(script_text, speakers_for_prompt)
+
+            # Attach gender hints from the dialogue seed so the TTS layer
+            # (ElevenLabs' _build_speaker_voice_map) can pick a gender-
+            # matched voice. Without this hint, all speakers would be
+            # round-robin'd across the full voice pool regardless of name.
+            speakers_with_gender: List[Dict[str, Any]] = []
+            name_to_gender: Dict[str, str] = {}
+            if d_seed:
+                name_to_gender[d_seed["speaker_a_name"]] = (
+                    "female" if "she" in d_seed["speaker_a_pronouns"] else "male"
+                )
+                name_to_gender[d_seed["speaker_b_name"]] = (
+                    "female" if "she" in d_seed["speaker_b_pronouns"] else "male"
+                )
+            from app.services.prompt_library import NAMES_F as _NF
+            for sp in parsed_result["speakers"]:
+                name = sp.get("name") or ""
+                # Use the seed mapping if we have it; else infer from name pool.
+                if name in name_to_gender:
+                    sp["gender"] = name_to_gender[name]
+                elif name in _NF:
+                    sp["gender"] = "female"
+                else:
+                    sp["gender"] = "male"
+                speakers_with_gender.append(sp)
 
             return {
                 "success": True,
                 "script": parsed_result["script"],
-                "speakers": parsed_result["speakers"],
+                "speakers": speakers_with_gender,
                 "comprehension_questions": parsed_result["questions"],
                 "vocabulary_focus": parsed_result["vocabulary"]
             }
@@ -708,21 +629,89 @@ Output Format (use these exact section markers):
         return await audio_storage_service.get_audio(filename)
 
 
-async def get_tts_service() -> "GeminiTTSService":
+async def get_tts_service():
     """
     Get or create a singleton TTS service instance.
+
+    Provider is selected by the ``TTS_PROVIDER`` env var:
+      - ``elevenlabs`` → ElevenLabsTTSService (paid, higher voice quality)
+      - anything else (default) → GeminiTTSService
+
+    The returned object exposes ``generate_audio_content(...)`` and
+    ``get_cached_audio(...)`` regardless of provider, so existing endpoints
+    don't need to change.
+
     Thread-safe for concurrent access.
     """
     global _tts_service_instance, _tts_service_lock
-    
+
     # Lazy initialize the lock to avoid event loop issues
     if _tts_service_lock is None:
         _tts_service_lock = asyncio.Lock()
-    
+
     if _tts_service_instance is None:
         async with _tts_service_lock:
             # Double-check after acquiring lock
             if _tts_service_instance is None:
-                _tts_service_instance = GeminiTTSService()
-                logger.info("TTS service singleton instance created")
+                provider = (
+                    getattr(settings, "TTS_PROVIDER", "")
+                    or getattr(settings, "TTS_SERVICE", "")
+                    or "openai"
+                ).strip().lower()
+
+                # Resolution order with automatic fallback (2026-05-13):
+                # If the chosen provider's API key is missing, we cascade
+                # down: openai → elevenlabs → gemini. This way a fresh
+                # dev environment without OpenAI still produces audio,
+                # and a production with OPENAI_API_KEY set always
+                # prefers the natural-voice provider.
+                openai_key = getattr(settings, "OPENAI_API_KEY", None)
+                eleven_key = getattr(settings, "ELEVENLABS_API_KEY", None)
+
+                if provider == "openai" and openai_key:
+                    from app.services.openai_tts_service import OpenAITTSService
+                    _tts_service_instance = OpenAITTSService()
+                    logger.info(
+                        "TTS service singleton created (provider=openai)"
+                    )
+                elif provider == "elevenlabs" and eleven_key:
+                    from app.services.elevenlabs_tts_service import (
+                        ElevenLabsTTSService,
+                    )
+                    _tts_service_instance = ElevenLabsTTSService()
+                    logger.info(
+                        "TTS service singleton created (provider=elevenlabs)"
+                    )
+                elif provider in ("openai", "elevenlabs"):
+                    # Chosen provider's key missing — try the other
+                    # provider before falling back to Gemini.
+                    if openai_key:
+                        from app.services.openai_tts_service import (
+                            OpenAITTSService,
+                        )
+                        _tts_service_instance = OpenAITTSService()
+                        logger.warning(
+                            "TTS_PROVIDER=%s but its key is missing; using "
+                            "OpenAI TTS instead.", provider,
+                        )
+                    elif eleven_key:
+                        from app.services.elevenlabs_tts_service import (
+                            ElevenLabsTTSService,
+                        )
+                        _tts_service_instance = ElevenLabsTTSService()
+                        logger.warning(
+                            "TTS_PROVIDER=%s but its key is missing; using "
+                            "ElevenLabs TTS instead.", provider,
+                        )
+                    else:
+                        _tts_service_instance = GeminiTTSService()
+                        logger.warning(
+                            "Neither OpenAI nor ElevenLabs key configured "
+                            "— falling back to Gemini TTS."
+                        )
+                else:
+                    _tts_service_instance = GeminiTTSService()
+                    logger.info(
+                        "TTS service singleton created (provider=gemini)"
+                    )
     return _tts_service_instance
