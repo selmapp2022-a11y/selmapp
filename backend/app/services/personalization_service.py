@@ -7,9 +7,10 @@ from enum import Enum
 
 from app.crud.personalization import (
     learning_profile, learning_path, learning_milestone,
-    content_recommendation, trainer_interaction, learning_analytics, 
+    content_recommendation, trainer_interaction, learning_analytics,
     user_onboarding, user_category_preference
 )
+from app.crud.user import user_crud
 from app.crud.speaking import speaking_prompt
 from app.crud.reading import reading_text
 from app.crud.listening import crud_audio_content
@@ -902,6 +903,23 @@ class PersonalizationService:
             feedback=final_data.get("feedback"),
             rating=final_data.get("rating")
         )
+
+        # Mirror the completion flag onto the User row. The router (web +
+        # mobile) reads User.onboarding_completed from /users/profile to
+        # decide whether to send a returning user through placement, so
+        # both flags need to agree. Without this, completing onboarding on
+        # one device leaves every other device thinking onboarding is
+        # unfinished. Best-effort — never block onboarding completion on
+        # this write.
+        try:
+            user_row = await user_crud.get(db, id=user_id)
+            if user_row is not None and not user_row.onboarding_completed:
+                await user_crud.update(
+                    db, db_obj=user_row, obj_in={"onboarding_completed": True}
+                )
+        except Exception:
+            # Logged at the warning level inside user_crud / SQLAlchemy.
+            pass
         
         # Generate initial recommendations
         recommendations = await self.generate_recommendations(db, user_profile_id=profile["profile"].id, limit=10)

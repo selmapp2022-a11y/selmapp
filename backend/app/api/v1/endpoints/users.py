@@ -45,6 +45,28 @@ async def get_profile(
 ) -> Any:
     """Get current user profile"""
     from app.crud.oauth2 import oauth2_account_crud
+    from app.crud.personalization import user_onboarding as user_onboarding_crud
+
+    # Self-heal: any user whose UserOnboarding row says "completed" but
+    # whose User.onboarding_completed flag is still False (legacy bug — the
+    # flag wasn't being mirrored at placement-submit time) gets quietly
+    # fixed on their next profile fetch. This unblocks accounts that
+    # completed onboarding on one device before the server-side fix shipped
+    # and were otherwise being sent through placement again on every login.
+    if not current_user.onboarding_completed:
+        try:
+            onboarding_row = await user_onboarding_crud.get_by_user_id(
+                db, user_id=current_user.id
+            )
+            if onboarding_row is not None and getattr(onboarding_row, "is_completed", False):
+                await user_crud.update(
+                    db,
+                    db_obj=current_user,
+                    obj_in={"onboarding_completed": True},
+                )
+        except Exception:
+            # Heal is opportunistic; never fail the profile fetch over it.
+            pass
 
     # Load OAuth2 accounts to avoid async serialization issues
     oauth_accounts = await oauth2_account_crud.get_user_oauth_accounts(db, user_id=current_user.id)
@@ -615,11 +637,17 @@ async def _generate_assessment_quiz_shared(
                         logger.info(f"Generating TTS audio for listening question {q.get('id')} ({tts_generated + 1}/{MAX_TTS_QUESTIONS})")
                         try:
                             # Add timeout to prevent hanging
+                            # 2026-05-13: stopped hardcoding voice_name="Kore"
+                            # (a Gemini-only name). Under ElevenLabs that
+                            # cascaded to ELEVENLABS_VOICE_ID and every
+                            # assessment question played in the same voice.
+                            # Passing voice_category instead lets the resolver
+                            # randomise across the narrator pool per question.
                             tts = await asyncio.wait_for(
                                 tts_service.generate_audio_content(
                                     text=str(audio_text),
                                     audio_type="assessment_listening",
-                                    speaker_config=[{"name": "Narrator", "voice_name": getattr(settings, "GEMINI_TTS_VOICE", "Kore")}]
+                                    speaker_config=[{"name": "Narrator", "voice_category": "narrator_warm"}]
                                 ),
                                 timeout=TTS_TIMEOUT_SECONDS
                             )
@@ -788,8 +816,15 @@ async def submit_level_assessment(
             assessed_level_enum = UserLevel.A1
 
         level_changed = assessed_level_enum != current_user.current_level
+        # Always set onboarding_completed=True when a placement is submitted:
+        # by definition, finishing the placement IS finishing onboarding. Doing
+        # it server-side here removes the dependency on the frontend's
+        # best-effort PUT /users/profile call (which silently swallows errors)
+        # and makes the flag correct across every device the user signs in on.
+        update_payload: dict = {"onboarding_completed": True}
         if level_changed:
-            await user_crud.update(db, db_obj=current_user, obj_in={"current_level": assessed_level_enum})
+            update_payload["current_level"] = assessed_level_enum
+        await user_crud.update(db, db_obj=current_user, obj_in=update_payload)
 
         # Tailored recommendations (merge AI + level-based)
         base_recs = await _generate_level_based_recommendations(assessed_level_enum, final_skills)
