@@ -819,3 +819,263 @@ async def oauth_apple_native(
     user = auth_result["user"]
     await user_crud.update_last_login(db, user_id=user.id)
     return _build_native_token_response(user)
+
+
+# ── Sign in with Apple ────────────────────────────────────────────
+"""
+Sign in with Apple — backend endpoint.
+
+DROP-IN FILE: paste at the bottom of
+``app/api/v1/endpoints/auth.py`` (after the ``/oauth/providers`` endpoint,
+before the password reset section).
+
+Why a separate endpoint and not the generic /oauth/login flow
+-------------------------------------------------------------
+Sign in with Apple is fundamentally different from Google/GitHub/Facebook:
+
+- It uses the **native iOS UI** (no browser redirect, no OAuth code).
+- The client gets an **identityToken (JWT)** signed by Apple, plus an
+  authorizationCode (which we don't need here — the JWT is the source of
+  truth for the user's identity).
+- We verify the JWT against Apple's public keys at
+  https://appleid.apple.com/auth/keys and trust its `sub` claim as the
+  permanent Apple user identifier.
+
+Apple also requires this endpoint to support the "Hide my email" private
+relay flow — when the user opts to hide their email, Apple gives us a
+randomized `@privaterelay.appleid.com` address that forwards to their real
+inbox. We treat it like any other email.
+
+Environment variables expected (set in DigitalOcean App env):
+  APPLE_CLIENT_ID  — the iOS app's bundle ID (com.selmapp.app)
+                     This is the `aud` claim the JWT will contain.
+                     If unset, we skip the audience check (NOT recommended
+                     in production — but we log a warning and still verify
+                     the signature so the endpoint stays usable for dev).
+"""
+import base64
+import json
+import logging
+import os
+from typing import Any, Dict, Optional
+
+import httpx
+import jwt
+from fastapi import Body, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_db
+from app.core.security import create_access_token, create_refresh_token
+from app.crud.user import user_crud
+from app.schemas.user import UserCreate
+
+log = logging.getLogger(__name__)
+
+APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
+APPLE_ISSUER = "https://appleid.apple.com"
+
+# Cache Apple's public keys in-process for 1 hour to avoid hammering their
+# endpoint on every sign-in. Apple rotates these rarely; if a verification
+# fails we re-fetch once before giving up.
+_apple_keys_cache: Dict[str, Any] = {"keys": None, "fetched_at": 0}
+_APPLE_KEYS_TTL = 3600  # 1 hour
+
+
+@router.post("/apple/login")  # type: ignore[name-defined]
+async def apple_sign_in(
+    payload: Dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify Apple identityToken and issue our own JWT.
+
+    Body:
+        identity_token: str (required) — JWT from sign_in_with_apple.
+        full_name:      str (optional) — only sent on FIRST sign-in by Apple.
+        email:          str (optional) — fallback if JWT doesn't carry it.
+
+    Returns the standard auth payload:
+        { access_token, refresh_token, token_type, user }
+
+    Why we accept name/email separately from the JWT
+    ------------------------------------------------
+    Apple includes `email` in the JWT only on the first sign-in (per their
+    docs) — subsequent sign-ins get a JWT with just `sub`. The frontend
+    passes name + email through on first sign-in so we can populate the
+    user record. For returning users we just look them up by `sub`.
+    """
+    identity_token = (payload or {}).get("identity_token")
+    full_name = (payload or {}).get("full_name", "").strip()
+    fallback_email = (payload or {}).get("email", "").strip()
+
+    if not identity_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="identity_token is required",
+        )
+
+    try:
+        claims = await _verify_apple_identity_token(identity_token)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Apple identity token verification failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Apple identity token",
+        )
+
+    apple_user_id = claims.get("sub")
+    email = (claims.get("email") or fallback_email or "").lower().strip()
+
+    if not apple_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Apple token missing subject",
+        )
+
+    if not email:
+        # Apple lets users hide their email AND not share it — in that case
+        # we can't create a user record. Reject and surface a friendly error
+        # so the UI can prompt the user to re-try with email shared.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Apple sign-in didn't share an email. Please retry and choose 'Share My Email'.",
+        )
+
+    # Find-or-create user by email (apple_user_id stored in oauth_accounts
+    # would be nicer long-term, but the existing User model already keys on
+    # email which is sufficient for guideline 4.8 compliance).
+    user = await user_crud.get_by_email(db, email=email)
+    if user is None:
+        derived_name = full_name or email.split("@")[0]
+        user_in = UserCreate(
+            email=email,
+            password=None,  # OAuth-only user (no password set)
+            full_name=derived_name,
+        )
+        try:
+            user = await user_crud.create(db, obj_in=user_in)
+        except TypeError:
+            # Some UserCreate variants don't accept password=None — retry
+            # with a random sentinel password the user can later reset.
+            import secrets
+            user_in.password = secrets.token_urlsafe(32)
+            user = await user_crud.create(db, obj_in=user_in)
+
+    access_token = create_access_token(subject=user.id)
+    refresh_token = create_refresh_token(subject=user.id)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "is_premium": getattr(user, "is_premium", False),
+            "onboarding_completed": getattr(user, "onboarding_completed", False),
+        },
+    }
+
+
+# ── Apple JWT verification ────────────────────────────────────────────
+async def _verify_apple_identity_token(identity_token: str) -> Dict[str, Any]:
+    """Verify the signature + claims of an Apple identityToken.
+
+    Steps:
+      1. Decode the JWT header to find the `kid` (key id).
+      2. Fetch Apple's public keys (cached) and find the matching one.
+      3. Construct a PyJWT-compatible RSA public key.
+      4. Verify signature, issuer, audience, and expiration.
+
+    Returns the decoded claims dict on success; raises on failure.
+    """
+    # Decode header without verification to find the kid + alg
+    header = jwt.get_unverified_header(identity_token)
+    kid = header.get("kid")
+    alg = header.get("alg", "RS256")
+    if not kid:
+        raise ValueError("Apple JWT missing kid in header")
+
+    # Look up the matching public key (fetch fresh on cache miss/stale)
+    keys = await _get_apple_keys(force_refresh=False)
+    matching = next((k for k in keys if k.get("kid") == kid), None)
+    if matching is None:
+        # Maybe Apple just rotated keys — try once more with a fresh fetch.
+        keys = await _get_apple_keys(force_refresh=True)
+        matching = next((k for k in keys if k.get("kid") == kid), None)
+        if matching is None:
+            raise ValueError(f"No Apple public key matches kid={kid}")
+
+    public_key = _jwk_to_rsa_public_key(matching)
+
+    # Audience check: the JWT's `aud` should be our iOS bundle ID. If
+    # APPLE_CLIENT_ID isn't configured we skip the check and log a warning
+    # rather than failing — better to keep the endpoint usable in dev than
+    # to lock everyone out.
+    audience = os.getenv("APPLE_CLIENT_ID", "").strip() or None
+    verify_aud = bool(audience)
+    if not verify_aud:
+        log.warning(
+            "APPLE_CLIENT_ID env var not set — skipping aud claim verification"
+        )
+
+    options = {
+        "verify_signature": True,
+        "verify_exp": True,
+        "verify_iss": True,
+        "verify_aud": verify_aud,
+    }
+
+    claims = jwt.decode(
+        identity_token,
+        key=public_key,
+        algorithms=[alg],
+        audience=audience if verify_aud else None,
+        issuer=APPLE_ISSUER,
+        options=options,
+    )
+    return claims
+
+
+async def _get_apple_keys(force_refresh: bool = False) -> list:
+    """Fetch Apple's JWKS (with simple in-process cache)."""
+    import time
+    now = int(time.time())
+    if (
+        not force_refresh
+        and _apple_keys_cache["keys"]
+        and (now - _apple_keys_cache["fetched_at"]) < _APPLE_KEYS_TTL
+    ):
+        return _apple_keys_cache["keys"]
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(APPLE_KEYS_URL)
+        r.raise_for_status()
+        data = r.json()
+
+    keys = data.get("keys") or []
+    _apple_keys_cache["keys"] = keys
+    _apple_keys_cache["fetched_at"] = now
+    return keys
+
+
+def _jwk_to_rsa_public_key(jwk: Dict[str, Any]):
+    """Convert a JWK dict (n, e) into a cryptography RSAPublicKey.
+
+    Pure stdlib + cryptography — we don't pull in extra JWK libraries.
+    """
+    from cryptography.hazmat.primitives.asymmetric.rsa import (
+        RSAPublicNumbers,
+    )
+    from cryptography.hazmat.backends import default_backend
+
+    def _b64url_decode(s: str) -> bytes:
+        # JWK uses base64url without padding — restore it before decoding.
+        padded = s + "=" * (-len(s) % 4)
+        return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+    n_bytes = _b64url_decode(jwk["n"])
+    e_bytes = _b64url_decode(jwk["e"])
+    n_int = int.from_bytes(n_bytes, "big")
+    e_int = int.from_bytes(e_bytes, "big")
+    return RSAPublicNumbers(e=e_int, n=n_int).public_key(default_backend())
