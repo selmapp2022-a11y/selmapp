@@ -20,6 +20,14 @@ class OAuthProvider(str, enum.Enum):
     GOOGLE = "google"
     GITHUB = "github"
     FACEBOOK = "facebook"
+    # APPLE added 2026-07-07 to fix Apple rejection (Guideline 2.1a).
+    # Sign in with Apple was throwing 500 because the DB enum
+    # `oauthprovider` didn't include 'apple'. The paired migration
+    # `20260707_add_apple_to_oauthprovider.py` runs `ALTER TYPE
+    # oauthprovider ADD VALUE 'apple'` on the database. Both must ship
+    # together — Python enum and DB enum have to agree, or SQLAlchemy
+    # will complain about unknown values on read.
+    APPLE = "apple"
 
 class OAuth2Account(Base):
     __tablename__ = "oauth2_accounts"
