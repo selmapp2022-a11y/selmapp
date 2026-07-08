@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_SECRET: Optional[str] = None
     FACEBOOK_CLIENT_ID: Optional[str] = None
     FACEBOOK_CLIENT_SECRET: Optional[str] = None
+    # Sign in with Apple — bundle ID (mobile) and/or service ID (web).
+    # Declared here so pydantic-settings picks them up from env vars.
+    # Without the declaration, `getattr(settings, "APPLE_BUNDLE_ID", None)`
+    # in auth.oauth_apple_native returns None, which trips the
+    # "Apple sign-in not configured" 503 even when the env var is set.
+    # That was the root cause of Apple's Guideline 2.1(a) rejection on
+    # Build 35 — SIWA hit 503 instead of validating the token.
+    APPLE_BUNDLE_ID: Optional[str] = None
+    APPLE_SERVICE_ID: Optional[str] = None
     OAUTH_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/callback"
     
     # PayPal Settings
