@@ -477,6 +477,13 @@ class _ProfilePageState extends State<ProfilePage>
           ),
           const SizedBox(height: 16),
           _buildSettingsItem(
+            icon: Icons.workspace_premium,
+            iconColor: const Color(0xFF5EEAD4),
+            title: 'Upgrade to SELM Pro',
+            subtitle: 'Unlimited practice • 7-day free trial • Cancel anytime',
+            onTap: () => context.push('/paywall'),
+          ),
+          _buildSettingsItem(
             icon: Icons.admin_panel_settings,
             title: 'Admin Panel',
             subtitle: 'Manage users, reports and app settings',

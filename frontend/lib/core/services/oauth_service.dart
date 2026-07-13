@@ -31,6 +31,85 @@ class OAuthService {
     return _startOAuthFlow('facebook');
   }
 
+  /// Sign in with Apple — uses the native iOS / macOS auth UI.
+  ///
+  /// Different from OAuth: no browser flow. We receive a JWT identityToken
+  /// from Apple, hand it to /auth/apple/login, and the backend verifies it
+  /// against Apple's public keys and returns our own access/refresh tokens.
+  Future<Map<String, dynamic>> loginWithApple() async {
+    if (kIsWeb || !(Platform.isIOS || Platform.isMacOS)) {
+      return {
+        'success': false,
+        'message': 'Sign in with Apple is only available on iOS and macOS.',
+      };
+    }
+    try {
+      final available = await SignInWithApple.isAvailable();
+      if (!available) {
+        return {
+          'success': false,
+          'message': 'Sign in with Apple is not available on this device.',
+        };
+      }
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+      );
+      final identityToken = credential.identityToken;
+      if (identityToken == null || identityToken.isEmpty) {
+        return {
+          'success': false,
+          'message': 'Apple did not return an identity token. Please try again.',
+        };
+      }
+      String fullName = '';
+      if (credential.givenName != null || credential.familyName != null) {
+        fullName = [
+          credential.givenName ?? '',
+          credential.familyName ?? '',
+        ].where((p) => p.isNotEmpty).join(' ').trim();
+      }
+      final response = await _apiClient.post(
+        '/auth/apple/login',
+        data: {
+          'identity_token': identityToken,
+          if (fullName.isNotEmpty) 'full_name': fullName,
+          if (credential.email != null && credential.email!.isNotEmpty)
+            'email': credential.email,
+        },
+      );
+      final data = response.data;
+      if (data is! Map) {
+        return {'success': false, 'message': 'Invalid response from server'};
+      }
+      final accessToken = data['access_token']?.toString();
+      final refreshToken = data['refresh_token']?.toString();
+      if (accessToken == null || accessToken.isEmpty) {
+        return {'success': false, 'message': 'No access token in server response'};
+      }
+      await _storage.write('access_token', accessToken);
+      await _storage.write('auth_token', accessToken);
+      if (refreshToken != null && refreshToken.isNotEmpty) {
+        await _storage.write('refresh_token', refreshToken);
+      }
+      return {'success': true, 'provider': 'apple', 'message': 'Signed in with Apple'};
+    } on SignInWithAppleAuthorizationException catch (e) {
+      if (e.code == AuthorizationErrorCode.canceled) {
+        return {'success': false, 'cancelled': true, 'message': 'Sign in cancelled'};
+      }
+      if (kDebugMode) {
+        print('❌ Apple sign-in authorization error: \${e.code} \${e.message}');
+      }
+      return {'success': false, 'message': 'Apple sign-in failed: \${e.message}'};
+    } catch (e) {
+      if (kDebugMode) print('❌ Apple sign-in error: \$e');
+      return {'success': false, 'message': 'Apple sign-in error: \${e.toString()}'};
+    }
+  }
+
+
   /// Native Google sign-in (mobile only).
   /// Uses google_sign_in SDK to obtain an ID token, then posts it to the
   /// backend to exchange for our JWT access/refresh tokens.

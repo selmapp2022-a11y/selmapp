@@ -422,16 +422,6 @@ async def real_time_assessment(
 @router.post("/audio-conversation")
 async def process_audio_conversation(
     conversation_context: str = Query(..., description="Context for the conversation (e.g., 'daily life', 'business meeting')"),
-    conversation_history: Optional[str] = Query(
-        default=None,
-        description=(
-            "JSON-encoded list of prior turns in the format "
-            "[{'type':'user_audio','transcription':'...'}, "
-            "{'type':'ai_response','response':'...'}, ...]. "
-            "Sending this lets the AI remember what was said and continue the dialogue "
-            "instead of treating every turn as the first one."
-        ),
-    ),
     audio_file: UploadFile = File(...),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
@@ -444,20 +434,7 @@ async def process_audio_conversation(
     helpful message instead of a generic failure.
     """
     import logging as _logging
-    import json as _json
     log = _logging.getLogger(__name__)
-
-    # Parse conversation_history (optional, JSON string). Bad JSON = ignore
-    # and behave like a brand-new conversation, never 422 the user.
-    history: Optional[list] = None
-    if conversation_history:
-        try:
-            parsed = _json.loads(conversation_history)
-            if isinstance(parsed, list):
-                history = parsed
-        except _json.JSONDecodeError:
-            log.warning("audio-conversation: ignoring malformed conversation_history")
-
     try:
         # Get user level for personalization. The CRUDSpeakingProgress.get_by_user
         # is sync and expects user_id as a keyword arg; avoid that whole CRUD path
@@ -467,13 +444,11 @@ async def process_audio_conversation(
         # Read audio data
         audio_data = await audio_file.read()
 
-        # Process conversation — pass history so the AI actually continues
-        # the dialogue instead of restarting on every turn.
+        # Process conversation
         result = await gemini_conversation_service.process_audio_conversation(
             audio_data=audio_data,
             conversation_context=conversation_context,
             user_level=user_level,
-            conversation_history=history,
             user_id=current_user.id
         )
     except Exception as e:
