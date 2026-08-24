@@ -157,6 +157,15 @@ async def close_db():
     await redis_client.close()
 
 
+# Seed passwords that were once compiled into this repository as defaults.
+# Any admin account still using one of these is rotated on startup. Do not
+# remove entries — an old database may still carry them.
+_COMPROMISED_SEED_PASSWORDS = (
+    "ChangeMe!Dev2025",
+    "ChangeMe!Owner2025",
+)
+
+
 async def seed_admin_users():
     """
     Seed admin users on app startup.
@@ -164,7 +173,7 @@ async def seed_admin_users():
     Safe to run repeatedly — will not overwrite existing admin passwords unless
     the admin user doesn't exist yet.
     """
-    from app.core.security import get_password_hash
+    from app.core.security import get_password_hash, verify_password
     from sqlalchemy import select
 
     admin_accounts = [
@@ -243,5 +252,29 @@ async def seed_admin_users():
                 existing.admin_role = acct["admin_role"]
                 existing.is_active = True
                 logger.info("Updated admin flags for: %s (%s)", acct["email"], acct["admin_role"])
+
+                # One-way rotation of compromised seed passwords.
+                #
+                # Until 2026-08-24 ADMIN_DEV_PASSWORD and ADMIN_OWNER_PASSWORD
+                # defaulted to literals committed to this repository, neither
+                # was set on the production host, and this function created the
+                # accounts with them. dev@selmapp.com was verified still logging
+                # in with "ChangeMe!Dev2025" on production.
+                #
+                # This block replaces the stored password ONLY when it still
+                # matches one of those published defaults. An admin who has
+                # already chosen their own password is never touched.
+                if existing.hashed_password and any(
+                    verify_password(known, existing.hashed_password)
+                    for known in _COMPROMISED_SEED_PASSWORDS
+                ):
+                    existing.hashed_password = get_password_hash(acct["password"])
+                    existing.has_password = True
+                    logger.warning(
+                        "Rotated compromised default password for admin %s. "
+                        "The account was using a password published in the "
+                        "repository; it now uses the configured value.",
+                        acct["email"],
+                    )
 
         await session.commit()

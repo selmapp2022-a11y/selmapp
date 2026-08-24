@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     APPLE_SERVICE_ID: Optional[str] = None
     OAUTH_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/oauth/callback"
     
+    # RevenueCat — shared secret for the purchase webhook.
+    # DECLARED ON PURPOSE. pydantic-settings only reads env vars that are
+    # declared as fields here; an env var set on the host but missing from
+    # this class is silently invisible to the app. That is what happened to
+    # APPLE_BUNDLE_ID (Apple Guideline 2.1(a) rejection on Build 35) and it
+    # happened again here: REVENUECAT_WEBHOOK_AUTH was set as a SECRET on
+    # DigitalOcean, resolved to None, and the webhook's auth check was
+    # skipped entirely — any caller could post a subscription event.
+    REVENUECAT_WEBHOOK_AUTH: Optional[str] = None
+
+    # Native Google sign-in audiences. Referenced by
+    # auth.oauth_google_native; undeclared until now, so setting them on the
+    # host had no effect and native iOS/Android Google tokens could never
+    # match the expected audience set.
+    GOOGLE_IOS_CLIENT_ID: Optional[str] = None
+    GOOGLE_ANDROID_CLIENT_ID: Optional[str] = None
+
+    # Referenced via getattr() elsewhere; declared so the host can set them.
+    FRONTEND_URL: Optional[str] = None
+    STORAGE_PATH: str = "storage"
+
     # PayPal Settings
     PAYPAL_CLIENT_ID: Optional[str] = None
     PAYPAL_CLIENT_SECRET: Optional[str] = None
@@ -169,12 +190,20 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
     
-    # Admin Seeding Credentials
+    # ── Admin Seeding Credentials ──
+    #
+    # ADMIN_DEV_PASSWORD and ADMIN_OWNER_PASSWORD have NO default and are
+    # required. Until 2026-08-24 they defaulted to the literals
+    # "ChangeMe!Dev2025" and "ChangeMe!Owner2025", neither was set on the
+    # production host, and the seeder created the accounts with exactly
+    # those passwords — dev@selmapp.com was still logging in with the
+    # default on production. A missing value must stop the process, not
+    # silently install a password that is published in this repository.
     ADMIN_DEV_EMAIL: str = "dev@selmapp.com"
-    ADMIN_DEV_PASSWORD: str = "ChangeMe!Dev2025"
+    ADMIN_DEV_PASSWORD: str
     ADMIN_DEV_USERNAME: str = "admin_dev"
     ADMIN_OWNER_EMAIL: str = "admin@selmapp.com"
-    ADMIN_OWNER_PASSWORD: str = "ChangeMe!Owner2025"
+    ADMIN_OWNER_PASSWORD: str
     ADMIN_OWNER_USERNAME: str = "admin_owner"
     
     # ── URL-decode keys that may have been pasted in encoded form ──

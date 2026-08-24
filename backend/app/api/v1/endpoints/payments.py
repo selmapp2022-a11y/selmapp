@@ -1,3 +1,4 @@
+import secrets as _secrets
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
@@ -821,23 +822,38 @@ async def handle_revenuecat_webhook(
     RevenueCat authenticates webhooks via the `Authorization` header that
     the user configures in the RevenueCat dashboard. Compare it against
     `settings.REVENUECAT_WEBHOOK_AUTH` (set as a SECRET on DigitalOcean).
+
+    FAILS CLOSED. If the secret is not configured, this endpoint returns
+    500 and processes nothing. Previously the check was wrapped in
+    `if expected:` and the secret resolved to None because the setting was
+    never declared in `Settings`, so every request — including one with no
+    Authorization header at all — was accepted and processed as genuine.
     """
-    expected = (getattr(settings, "REVENUECAT_WEBHOOK_AUTH", None) or "").strip()
-    if expected:
-        raw = (request.headers.get("authorization") or "").strip()
-        # Accept either the raw secret or a "Bearer <secret>" / "Token <secret>" form.
-        provided = raw
-        for prefix in ("Bearer ", "bearer ", "Token ", "token "):
-            if provided.startswith(prefix):
-                provided = provided[len(prefix):].strip()
-                break
-        if provided != expected:
-            logger.warning(
-                "RevenueCat webhook rejected: invalid Authorization header "
-                "(provided_len=%d, expected_len=%d, provided_prefix=%r, expected_prefix=%r)",
-                len(provided), len(expected), provided[:6], expected[:6],
-            )
-            raise HTTPException(status_code=401, detail="Invalid webhook auth")
+    expected = (settings.REVENUECAT_WEBHOOK_AUTH or "").strip()
+    if not expected:
+        logger.error(
+            "RevenueCat webhook refused: REVENUECAT_WEBHOOK_AUTH is not "
+            "configured. Refusing to process purchase events unauthenticated."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook authentication is not configured",
+        )
+
+    raw = (request.headers.get("authorization") or "").strip()
+    # Accept either the raw secret or a "Bearer <secret>" / "Token <secret>" form.
+    provided = raw
+    for prefix in ("Bearer ", "bearer ", "Token ", "token "):
+        if provided.startswith(prefix):
+            provided = provided[len(prefix):].strip()
+            break
+    if not _secrets.compare_digest(provided, expected):
+        logger.warning(
+            "RevenueCat webhook rejected: invalid Authorization header "
+            "(provided_len=%d, expected_len=%d)",
+            len(provided), len(expected),
+        )
+        raise HTTPException(status_code=401, detail="Invalid webhook auth")
 
     try:
         payload = await request.json()
