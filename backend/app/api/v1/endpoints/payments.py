@@ -80,8 +80,9 @@ async def create_payment_order(
     db: Session = Depends(get_sync_db)
 ):
     """Create a PayPal order for one-time payment"""
+    _ensure_paypal_enabled(db)
+
     try:
-        _ensure_paypal_enabled(db)
 
         # Create PayPal order
         paypal_order = await paypal_service.create_order(
@@ -119,6 +120,8 @@ async def create_payment_order(
             status=paypal_order["status"]
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create PayPal order: {e}")
         raise HTTPException(
@@ -135,8 +138,9 @@ async def capture_payment_order(
     db: Session = Depends(get_sync_db)
 ):
     """Capture a PayPal order"""
+    _ensure_paypal_enabled(db)
+
     try:
-        _ensure_paypal_enabled(db)
 
         # Get payment record
         payment = payment_crud.get_by_paypal_order_id(db=db, paypal_order_id=order_id)
@@ -182,6 +186,8 @@ async def capture_payment_order(
             "currency": capture_result["currency"]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to capture PayPal order: {e}")
         raise HTTPException(
@@ -240,8 +246,9 @@ async def create_subscription(
     db: Session = Depends(get_sync_db)
 ):
     """Create a new subscription"""
+    _ensure_paypal_enabled(db)
+
     try:
-        _ensure_paypal_enabled(db)
 
         # Check if user already has an active subscription
         existing_subscription = subscription_crud.get_user_active_subscription(
@@ -292,6 +299,8 @@ async def create_subscription(
             "approval_url": paypal_subscription["approval_url"]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create subscription: {e}")
         raise HTTPException(
@@ -372,6 +381,8 @@ async def cancel_subscription(
             "status": cancelled_subscription.status
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cancel subscription: {e}")
         raise HTTPException(
@@ -547,6 +558,8 @@ async def bulk_update_content_locks(
             "updated_items": len(results)
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to bulk update content locks: {e}")
         raise HTTPException(
@@ -582,6 +595,8 @@ async def bulk_grant_content_access(
             "granted_items": granted_count
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to bulk grant content access: {e}")
         raise HTTPException(
@@ -639,6 +654,8 @@ async def create_refund(
         
         return db_refund
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create refund: {e}")
         raise HTTPException(
@@ -704,6 +721,8 @@ async def handle_paypal_webhook(
         
         return {"status": "received"}
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to handle PayPal webhook: {e}")
         raise HTTPException(
@@ -734,6 +753,8 @@ async def process_paypal_webhook(webhook_id: int, payload: Dict[str, Any]):
         finally:
             db.close()
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to process PayPal webhook {webhook_id}: {e}")
 
@@ -889,6 +910,8 @@ async def handle_revenuecat_webhook(
 
     try:
         payload = await request.json()
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.error(f"RevenueCat webhook: invalid JSON: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON")
@@ -1007,6 +1030,8 @@ async def get_my_subscription_summary(
             .order_by(Subscription.created_at.desc())
             .all()
         )
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.warning(f"/me/subscription: subscriptions table query failed ({e}); returning free entitlement")
         return {
