@@ -40,6 +40,38 @@ def _ensure_payment_enabled(db: Session) -> None:
         )
 
 
+def _ensure_paypal_enabled(db: Session) -> None:
+    """Guard for the PayPal order and subscription endpoints.
+
+    PayPal is NOT a live payment path for SELM. Purchases run through
+    RevenueCat on iOS and Android; `selm-web` never calls this module, and
+    the production service ran with PAYPAL_MODE=sandbox and
+    payment_enabled=false, so no PayPal order could ever be created.
+
+    Rather than leave three endpoints that look functional but are inert,
+    they now refuse explicitly. Set PAYPAL_ENABLED=true, supply live
+    credentials and PAYPAL_WEBHOOK_ID, and turn payment_enabled on in admin
+    settings if PayPal is ever brought back.
+
+    Cancellation is deliberately NOT gated, so an existing PayPal
+    subscription can still be cancelled.
+    """
+    if not settings.PAYPAL_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "The PayPal payment path is disabled. "
+                "Subscriptions are handled by RevenueCat."
+            ),
+        )
+    if settings.PAYPAL_MODE != "live":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PayPal is enabled but not configured for live payments",
+        )
+    _ensure_payment_enabled(db)
+
+
 # Payment Endpoints
 @router.post("/orders", response_model=PayPalOrderResponse)
 async def create_payment_order(
@@ -49,7 +81,7 @@ async def create_payment_order(
 ):
     """Create a PayPal order for one-time payment"""
     try:
-        _ensure_payment_enabled(db)
+        _ensure_paypal_enabled(db)
 
         # Create PayPal order
         paypal_order = await paypal_service.create_order(
@@ -104,7 +136,7 @@ async def capture_payment_order(
 ):
     """Capture a PayPal order"""
     try:
-        _ensure_payment_enabled(db)
+        _ensure_paypal_enabled(db)
 
         # Get payment record
         payment = payment_crud.get_by_paypal_order_id(db=db, paypal_order_id=order_id)
@@ -209,7 +241,7 @@ async def create_subscription(
 ):
     """Create a new subscription"""
     try:
-        _ensure_payment_enabled(db)
+        _ensure_paypal_enabled(db)
 
         # Check if user already has an active subscription
         existing_subscription = subscription_crud.get_user_active_subscription(

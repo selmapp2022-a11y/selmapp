@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_ID: Optional[str] = None
     PAYPAL_CLIENT_SECRET: Optional[str] = None
     PAYPAL_MODE: str = "sandbox"  # "sandbox" or "live"
+    # PayPal is switched off. Purchases run through RevenueCat; selm-web has
+    # no route into the PayPal flow, production ran with PAYPAL_MODE=sandbox
+    # and payment_enabled=false, so no PayPal order could be created. The
+    # order, capture and subscription endpoints now refuse with 410 instead
+    # of appearing to work. Set this true, with live credentials and
+    # PAYPAL_WEBHOOK_ID, to bring the path back.
+    PAYPAL_ENABLED: bool = False
     PAYPAL_WEBHOOK_ID: Optional[str] = None
     
     # Payment Settings
