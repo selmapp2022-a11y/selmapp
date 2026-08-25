@@ -120,17 +120,33 @@ class SpeechAcePremiumService:
         text: str,
         question_prompt: Optional[str] = None,
         user_id: Optional[str] = None,
+        task_type: str = "short-writing",
     ) -> Dict[str, Any]:
-        """Score a piece of written English against IELTS/CEFR rubrics."""
+        """Score a piece of written English against IELTS/CEFR rubrics.
+
+        Parameter names verified against the live v9 API on 2026-08-25. Every
+        one of them was previously wrong, so this call had never succeeded:
+
+          answer     — was sent as `user_audio_text` (that is the speech
+                       endpoint's field, not this one)
+          prompt     — was sent as `question_prompt`
+          task_type  — was not sent at all, and is mandatory. Allowed values
+                       are chat-writing, essay-writing and short-writing, and
+                       it must go in the query string, not the form body.
+
+        The service answered `error_invalid_parameters` every time, `_post`
+        returned success: False, and `/writing/assess` fell through to its
+        Gemini fallback without anything being logged as a failure.
+        """
         if not self.api_key:
             return {"success": False, "error": "SPEECHACE_API_KEY not configured"}
         if not (text or "").strip():
             return {"success": False, "error": "Empty text"}
-        params = {"key": self.api_key, "dialect": self.dialect}
+        params = {"key": self.api_key, "dialect": self.dialect, "task_type": task_type}
         form = aiohttp.FormData()
-        form.add_field("user_audio_text", text)
+        form.add_field("answer", text)
         if question_prompt:
-            form.add_field("question_prompt", question_prompt)
+            form.add_field("prompt", question_prompt)
         if user_id:
             form.add_field("user_id", user_id)
         return await self._post(SCORE_WRITING_URL, params, form, tag="score-writing")

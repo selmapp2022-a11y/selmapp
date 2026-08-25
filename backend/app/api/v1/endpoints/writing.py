@@ -555,9 +555,15 @@ async def assess_writing_direct(
 
         if sa_resp.get("success"):
             sa_data = sa_resp.get("data") or {}
+            # The writing endpoint answers under `writing_score`, not
+            # `text_score` — verified against the live v9 API 2026-08-25.
+            # `text_score` is the speech endpoint's envelope, so this read
+            # returned {} even on the rare occasion the call succeeded.
+            ws = sa_data.get("writing_score") or {}
             ts = sa_data.get("text_score") or {}
-            sa_score = ts.get("speechace_score") or {}
-            ielts = ts.get("ielts_score") or {}
+            sa_score = ws.get("speechace") or ts.get("speechace_score") or {}
+            ielts = ws.get("ielts") or ts.get("ielts_score") or {}
+            cefr = ws.get("cefr") or {}
 
             def _f(d, k):
                 v = d.get(k) if isinstance(d, dict) else None
@@ -575,9 +581,20 @@ async def assess_writing_direct(
                         "grammar": int(_f(sa_score, "grammar") or 0),
                         "vocabulary": int(_f(sa_score, "vocab") or 0),
                         "coherence": int(_f(sa_score, "coherence") or 0),
-                        "task_achievement": int(_f(sa_score, "relevance") or 0),
+                        # The writing endpoint calls this `task_response`;
+                        # `relevance` is the speech endpoint's name for it.
+                        "task_achievement": int(
+                            _f(sa_score, "task_response") or _f(sa_score, "relevance") or 0
+                        ),
                     },
                     "ielts_band": _f(ielts, "overall"),
+                    "ielts_bands": {
+                        "task_response": _f(ielts, "task_response"),
+                        "vocab": _f(ielts, "vocab"),
+                        "coherence": _f(ielts, "coherence"),
+                        "grammar": _f(ielts, "grammar"),
+                    },
+                    "cefr": cefr or None,
                     "feedback": ts.get("feedback_text") or "Detailed scores from SpeechAce. Review the highlights below.",
                     "strengths": ts.get("strengths") or [],
                     "weaknesses": ts.get("weaknesses") or [],
