@@ -3,7 +3,7 @@ import io
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Any, Optional
+from typing import Any
 
 from app.api.deps import get_db, get_current_user
 from app.schemas.speech import SpeechEvaluateResponse
@@ -13,102 +13,17 @@ from app.services.speaking_eval_service import SpeakingEvaluationService
 router = APIRouter()
 
 
-async def _generate_ielts_feedback(transcript: str, task_prompt: str, pronunciation_score: float) -> Optional[dict]:
-    """Run a Gemini IELTS-style assessment over the user's transcript.
-
-    Returns a dict with `tips` (list[str]), `bands` (dict of the four IELTS
-    sub-skills with band 0-9), and `overall_score` (0-100), or ``None`` if
-    Gemini is unavailable. Errors propagate to the caller.
-    """
-    import json as _json
-    import google.generativeai as genai
-    from app.core.config import settings as _settings
-    if not getattr(_settings, "GOOGLE_GEMINI_API_KEY", None):
-        return None
-    genai.configure(api_key=_settings.GOOGLE_GEMINI_API_KEY)
-    model = genai.GenerativeModel(
-        getattr(_settings, "GEMINI_TEXT_MODEL_REASON", _settings.GEMINI_MODEL)
-    )
-    task_block = f'\n        TASK GIVEN:\n        "{task_prompt.strip()}"' if task_prompt and task_prompt.strip() else ""
-    prompt_text = f"""You are an IELTS Speaking examiner. The candidate just gave the following spoken response (auto-transcribed){task_block}
-
-CANDIDATE TRANSCRIPT:
-\"\"\"
-{transcript}
-\"\"\"
-
-Score the response on the four official IELTS Speaking criteria using the 0-9 band scale.
-The four are Fluency and Coherence, Lexical Resource, Grammatical Range and
-Accuracy, and Pronunciation. Task Response is a WRITING criterion and is not
-awarded for Speaking; do not return one.
-Be specific — quote the candidate's exact words when pointing out errors or strengths.
-
-Return ONLY valid JSON (no markdown, no commentary):
-{{
-  "fluency_coherence": {{"band": 6.0, "comment": "..."}},
-  "lexical_resource": {{"band": 5.5, "comment": "..."}},
-  "grammar_accuracy": {{"band": 6.0, "comment": "..."}},
-  "pronunciation": {{"band": 6.0, "comment": "..."}},
-  "overall_band": 6.0,
-  "tips": [
-    "Specific actionable tip quoting an exact phrase the candidate used",
-    "Another concrete tip"
-  ]
-}}
-"""
-    import asyncio as _asyncio
-    loop = _asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, model.generate_content, prompt_text)
-    raw = (response.text or "").strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw
-        raw = raw.rsplit("```", 1)[0]
-    try:
-        data = _json.loads(raw)
-    except Exception:
-        return None
-    # The four official IELTS SPEAKING criteria. Until 2026-08-25 this mapping
-    # carried taskResponse — a Writing criterion — and dropped pronunciation,
-    # which is the one Speaking actually awards.
-    #
-    # NOTE: this whole function is currently unreachable. It has no call site
-    # anywhere in app/. The `ielts` block users actually see is built by
-    # SpeechAcePremiumService._normalise, whose mapping is already correct.
-    # Fixed here so that wiring this up later does not reintroduce the bug.
-    bands = {
-        "fluencyCoherence": data.get("fluency_coherence"),
-        "lexicalResource": data.get("lexical_resource"),
-        "grammarAccuracy": data.get("grammar_accuracy"),
-        "pronunciation": data.get("pronunciation"),
-    }
-
-    # The acoustic measure a transcript cannot carry.
-    #
-    # Fluency and Coherence depends on pausing, hesitation and pace. None of
-    # that survives transcription, so a judge reading only the transcript
-    # correctly declines to score it and returns null. The measurement it
-    # needs already exists in the same response.
-    #
-    # It is attached as what it is: a measure on its own 0-100 scale, under
-    # its own key. It is deliberately NOT converted into a band. No mapping
-    # from that scale to the 0-9 band scale has been fitted against real Test
-    # Report Forms, and a number an examiner would not recognise is worse
-    # than an empty cell.
-    fc = bands.get("fluencyCoherence")
-    if isinstance(fc, dict) and fc.get("band") is None and pronunciation_score is not None:
-        fc["acoustic"] = {
-            "value": pronunciation_score,
-            "scale": "0-100",
-            "source": "acoustic pipeline, same response",
-            "note": "Not a band. No fitted mapping to the 0-9 scale exists yet.",
-        }
-    overall_band = data.get("overall_band")
-    overall_score = round(float(overall_band) * 10) if overall_band else None
-    return {
-        "tips": data.get("tips") or [],
-        "bands": bands,
-        "overall_score": overall_score,
-    }
+# _generate_ielts_feedback was removed on 2026-08-25.
+#
+# It was a Gemini IELTS-Speaking examiner with no call site anywhere in
+# app/. Nothing a user has ever seen came from it. The `ielts` block the
+# speaking endpoint returns is built by SpeechAcePremiumService._normalise.
+#
+# It is deleted rather than kept "for later" because dead scoring code is
+# not free: it carried a wrong criterion mapping (Task Response, a writing
+# criterion, in place of Pronunciation) for months, and it was read twice
+# during step 03 as though it were live. The body is in git history at
+# d55f9e1 if a transcript-based speaking judge is ever wanted.
 
 
 def estimate_audio_duration_ms(audio_bytes: bytes) -> int:
