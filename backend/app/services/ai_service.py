@@ -1223,30 +1223,19 @@ scores to reproduce.
             }
             
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse writing assessment JSON: {e}")
-            # Return a basic assessment if parsing fails
-            return {
-                "success": True,
-                "content": {
-                    "overall_score": 70,
-                    "grammar_score": 70,
-                    "vocabulary_score": 70,
-                    "coherence_score": 70,
-                    "task_achievement_score": 70,
-                    "feedback": "Your writing shows good effort. Keep practicing to improve your skills.",
-                    "strengths": ["Good attempt at expressing ideas"],
-                    "weaknesses": ["Could benefit from more practice"],
-                    "errors": [],
-                    "vocabulary_suggestions": [],
-                    "suggestions": [
-                        "Continue practicing writing regularly",
-                        "Read more English content to improve vocabulary",
-                        "Review basic grammar rules"
-                    ],
-                    "next_steps": ["Practice writing daily"],
-                    "recommended_exercises": []
-                }
-            }
+            # A parse failure is a failure.
+            #
+            # This used to return success: True with 70 in every field —
+            # the same fabricated assessment the endpoint error paths
+            # returned, indistinguishable downstream from a real one, and
+            # uncountable in any measurement of how often the judge
+            # actually works.
+            #
+            # The call now requests application/json directly, so this
+            # branch should be unreachable. If it is ever reached, that is
+            # information worth having, not information worth hiding.
+            logger.error("writing assessment returned unparseable JSON: %s", e)
+            return {"success": False, "error": "judge returned unparseable output"}
         except Exception as e:
             logger.error(f"Error assessing writing: {e}")
             return {"success": False, "error": str(e)}

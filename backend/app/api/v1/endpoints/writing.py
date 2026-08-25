@@ -26,9 +26,16 @@ from app.schemas.writing import (
 from app.services.ai_service import AIService
 from datetime import datetime, timedelta
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 ai_service = AIService()
+
+# The values the bound writing assessor accepts. Mirrored from the vendor's
+# v9 writing endpoint; sending anything else returns error_invalid_parameters.
+ALLOWED_TASK_TYPES = {"chat-writing", "essay-writing", "short-writing"}
 
 # Writing Prompt Endpoints
 @router.get("/prompts/", response_model=List[WritingPromptResponse])
@@ -525,6 +532,7 @@ async def assess_writing_direct(
     writing_type: str = Body(default="general"),
     user_level: str = Body(default=None),
     prompt: str = Body(default=""),
+    task_type: str = Body(default="short-writing"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -534,7 +542,26 @@ async def assess_writing_direct(
     `prompt` is the original task the user was given (e.g. "Write a cover
     letter for a software engineer position"). When supplied, the AI grades
     Task Achievement against the prompt instead of giving generic feedback.
+
+    `task_type` says what kind of writing this is, and the assessor marks
+    against a different expectation for each. It is exam data: a 150-word
+    IELTS General Training Task 1 letter is short-writing, a 250-word Task 2
+    is essay-writing. Until 2026-08-25 it was fixed at short-writing inside
+    the service, so every task in every exam was marked as the same kind of
+    writing regardless of what the exam definition said it was. The default
+    is kept for the learning app, whose free-practice screens have no exam
+    definition to read it from.
     """
+    if task_type not in ALLOWED_TASK_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Unknown task_type.",
+                "given": task_type,
+                "allowed": sorted(ALLOWED_TASK_TYPES),
+            },
+        )
+
     try:
         # Use user's level if not provided
         level = user_level or (current_user.current_level.value if current_user.current_level else "B1")
@@ -549,6 +576,7 @@ async def assess_writing_direct(
                 text=text,
                 question_prompt=prompt or None,
                 user_id=str(current_user.id),
+                task_type=task_type,
             )
         except Exception:
             sa_resp = {"success": False}
@@ -610,111 +638,50 @@ async def assess_writing_direct(
                     "character_count": len(text),
                     "writing_type": writing_type,
                     "user_level": level,
+                    "task_type": task_type,
                     "scorer": "speechace_premium",
                 },
             }
 
-        # Fallback: Gemini-based assessment (the previous default).
-        ai_result = await ai_service.assess_writing(
-            text=text,
-            writing_type=writing_type,
-            user_level=level,
-            task_prompt=prompt,
-        )
-        
-        if ai_result.get('success'):
-            assessment = ai_result.get('content', {})
-            
-            return {
-                "success": True,
-                "assessment": {
-                    "scores": {
-                        "overall": assessment.get('overall_score', 70),
-                        "grammar": assessment.get('grammar_score', 70),
-                        "vocabulary": assessment.get('vocabulary_score', 70),
-                        "coherence": assessment.get('coherence_score', 70),
-                        "task_achievement": assessment.get('task_achievement_score', 70)
-                    },
-                    "feedback": assessment.get('feedback', 'Good effort! Keep practicing.'),
-                    "strengths": assessment.get('strengths', []),
-                    "weaknesses": assessment.get('weaknesses', []),
-                    "errors": assessment.get('errors', []),
-                    "vocabulary_suggestions": assessment.get('vocabulary_suggestions', []),
-                    "suggestions": assessment.get('suggestions', []),
-                    "next_steps": assessment.get('next_steps', []),
-                    "corrected_version": assessment.get('corrected_version'),
-                    "recommended_exercises": assessment.get('recommended_exercises', [])
-                },
-                "metadata": {
-                    "word_count": len(text.split()),
-                    "character_count": len(text),
-                    "writing_type": writing_type,
-                    "user_level": level
-                }
-            }
-        else:
-            # Fallback response
-            return {
-                "success": True,
-                "assessment": {
-                    "scores": {
-                        "overall": 70,
-                        "grammar": 70,
-                        "vocabulary": 70,
-                        "coherence": 70,
-                        "task_achievement": 70
-                    },
-                    "feedback": "Your writing shows good effort. Continue practicing to improve your skills.",
-                    "strengths": ["Good attempt at expressing ideas"],
-                    "weaknesses": [],
-                    "errors": [],
-                    "vocabulary_suggestions": [],
-                    "suggestions": [
-                        "Keep practicing writing regularly",
-                        "Read more English content to improve vocabulary"
-                    ],
-                    "next_steps": ["Practice writing daily"],
-                    "corrected_version": None,
-                    "recommended_exercises": []
-                },
-                "metadata": {
-                    "word_count": len(text.split()),
-                    "character_count": len(text),
-                    "writing_type": writing_type,
-                    "user_level": level
-                }
-            }
-            
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "assessment": {
-                "scores": {
-                    "overall": 70,
-                    "grammar": 70,
-                    "vocabulary": 70,
-                    "coherence": 70,
-                    "task_achievement": 70
-                },
-                "feedback": "Your writing has been received. Keep practicing!",
-                "strengths": [],
-                "weaknesses": [],
-                "errors": [],
-                "vocabulary_suggestions": [],
-                "suggestions": ["Continue practicing writing regularly"],
-                "next_steps": [],
-                "corrected_version": None,
-                "recommended_exercises": []
+        # No fallback judge. Deliberately.
+        #
+        # Until 2026-08-25 this endpoint fell through to a Gemini assessor
+        # when SpeechAce failed, and then to a fixed 70/70/70/70
+        # "assessment" when Gemini failed too. Both were returned as
+        # success: true, on a different scale from the primary judge, with
+        # nothing in the response to say which judge had answered.
+        #
+        # That substitution is how the inverted ranking measured in step 03
+        # survived for months: the numbers on screen never stopped
+        # arriving, they only stopped meaning anything.
+        #
+        # A scoring product may return a score or an error. It may not
+        # return a different judge's number, or an invented one, under the
+        # first judge's name. If a second judge is ever added it will be
+        # named in the response and combined explicitly, not swapped in
+        # when the first one is quiet.
+        reason = sa_resp.get("error") or "writing judge returned no usable score"
+        logger.error("writing judge failed; no substitution made: %s", reason)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "The writing judge is unavailable. No score was produced.",
+                "judge": "speechace_premium",
+                "reason": reason if isinstance(reason, str) else str(reason)[:300],
             },
-            "metadata": {
-                "word_count": len(text.split()),
-                "character_count": len(text),
-                "writing_type": writing_type,
-                "user_level": user_level or "B1"
-            }
-        }
+        )
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("writing assessment failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "The writing judge is unavailable. No score was produced.",
+                "reason": str(e)[:300],
+            },
+        )
 
 # Helper functions
 async def _assess_writing_submission(db: AsyncSession, submission) -> dict:
@@ -726,12 +693,28 @@ async def _assess_writing_submission(db: AsyncSession, submission) -> dict:
         if ai_result.get('success'):
             assessment = ai_result.get('content', {})
             
-            # Extract scores (with defaults)
-            overall_score = float(assessment.get('overall_score', 70.0))
-            grammar_score = float(assessment.get('grammar_score', 70.0))
-            vocabulary_score = float(assessment.get('vocabulary_score', 70.0))
-            coherence_score = float(assessment.get('coherence_score', 70.0))
-            task_achievement_score = float(assessment.get('task_achievement_score', 70.0))
+            # No defaults. A missing criterion used to become 70, which is
+            # a mark nobody awarded, written to the submission record and
+            # indistinguishable afterwards from one the judge did award.
+            required = (
+                'overall_score', 'grammar_score', 'vocabulary_score',
+                'coherence_score', 'task_achievement_score',
+            )
+            missing = [k for k in required if assessment.get(k) is None]
+            if missing:
+                logger.error(
+                    "submission %s: judge omitted %s",
+                    getattr(submission, "id", "?"), ", ".join(missing),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="The writing judge returned an incomplete assessment. The submission was not scored.",
+                )
+            overall_score = float(assessment['overall_score'])
+            grammar_score = float(assessment['grammar_score'])
+            vocabulary_score = float(assessment['vocabulary_score'])
+            coherence_score = float(assessment['coherence_score'])
+            task_achievement_score = float(assessment['task_achievement_score'])
             
             return {
                 'overall_score': overall_score,
@@ -755,47 +738,32 @@ async def _assess_writing_submission(db: AsyncSession, submission) -> dict:
                 'next_steps': assessment.get('next_steps', []),
                 'recommended_exercises': assessment.get('recommended_exercises', [])
             }
-        else:
-            # Fallback assessment if AI fails
-            return _fallback_assessment(submission)
-            
-    except Exception as e:
-        # Fallback assessment if AI service fails
-        return _fallback_assessment(submission)
+        logger.error("submission %s: judge returned no assessment", getattr(submission, "id", "?"))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The writing judge is unavailable. The submission was not scored.",
+        )
 
-def _fallback_assessment(submission) -> dict:
-    """Provide a basic assessment when AI is not available"""
-    word_count = submission.word_count
-    base_score = 70.0
-    
-    # Simple scoring based on word count and basic metrics
-    if word_count >= 100:
-        base_score += 10.0
-    if word_count >= 200:
-        base_score += 10.0
-    
-    return {
-        'overall_score': min(base_score, 100.0),
-        'grammar_score': base_score,
-        'vocabulary_score': base_score,
-        'coherence_score': base_score,
-        'task_achievement_score': base_score,
-        'content_organization': base_score,
-        'language_accuracy': base_score,
-        'vocabulary_range': base_score,
-        'sentence_structure': base_score,
-        'punctuation_mechanics': base_score,
-        'ai_feedback': 'Your writing has been submitted successfully. Keep practicing to improve!',
-        'suggestions': ['Continue practicing regularly', 'Focus on grammar and vocabulary'],
-        'strengths': ['Good effort', 'Completed the task'],
-        'weaknesses': ['Could improve with more practice'],
-        'positive_aspects': ['Good effort', 'Completed the task'],
-        'areas_for_improvement': ['Grammar', 'Vocabulary', 'Sentence structure'],
-        'specific_errors': [],
-        'vocabulary_suggestions': [],
-        'next_steps': ['Practice more writing exercises', 'Review grammar rules'],
-        'recommended_exercises': []
-    }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("submission %s: judge failed", getattr(submission, "id", "?"))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The writing judge is unavailable. The submission was not scored.",
+        )
+
+# _fallback_assessment was removed on 2026-08-25.
+#
+# It produced a score from word count alone — 70, plus 10 at 100 words,
+# plus 10 more at 200 — and that number was written to the submission
+# record as the user's assessment whenever the judge errored. A grader
+# that reads only length is exactly the failure this project is trying
+# to rule out, and it was sitting in the error path of the real one.
+#
+# There is no replacement. A submission that cannot be judged is not
+# scored, and the caller is told so.
+
 
 def _process_daily_writing_activity(submissions):
     """Process daily writing activity data"""
