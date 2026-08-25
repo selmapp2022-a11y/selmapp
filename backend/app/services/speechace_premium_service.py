@@ -133,6 +133,10 @@ class SpeechAcePremiumService:
           task_type  — was not sent at all, and is mandatory. Allowed values
                        are chat-writing, essay-writing and short-writing, and
                        it must go in the query string, not the form body.
+                       It is passed in by the caller from the exam
+                       definition; the default here serves the learning
+                       app's free-practice screens, which have no exam
+                       definition to read it from.
 
         The service answered `error_invalid_parameters` every time, `_post`
         returned success: False, and `/writing/assess` fell through to its
