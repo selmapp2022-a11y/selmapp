@@ -38,6 +38,9 @@ CANDIDATE TRANSCRIPT:
 \"\"\"
 
 Score the response on the four official IELTS Speaking criteria using the 0-9 band scale.
+The four are Fluency and Coherence, Lexical Resource, Grammatical Range and
+Accuracy, and Pronunciation. Task Response is a WRITING criterion and is not
+awarded for Speaking; do not return one.
 Be specific — quote the candidate's exact words when pointing out errors or strengths.
 
 Return ONLY valid JSON (no markdown, no commentary):
@@ -45,7 +48,7 @@ Return ONLY valid JSON (no markdown, no commentary):
   "fluency_coherence": {{"band": 6.0, "comment": "..."}},
   "lexical_resource": {{"band": 5.5, "comment": "..."}},
   "grammar_accuracy": {{"band": 6.0, "comment": "..."}},
-  "task_response": {{"band": 6.5, "comment": "How well they addressed the task"}},
+  "pronunciation": {{"band": 6.0, "comment": "..."}},
   "overall_band": 6.0,
   "tips": [
     "Specific actionable tip quoting an exact phrase the candidate used",
@@ -64,12 +67,41 @@ Return ONLY valid JSON (no markdown, no commentary):
         data = _json.loads(raw)
     except Exception:
         return None
+    # The four official IELTS SPEAKING criteria. Until 2026-08-25 this mapping
+    # carried taskResponse — a Writing criterion — and dropped pronunciation,
+    # which is the one Speaking actually awards.
+    #
+    # NOTE: this whole function is currently unreachable. It has no call site
+    # anywhere in app/. The `ielts` block users actually see is built by
+    # SpeechAcePremiumService._normalise, whose mapping is already correct.
+    # Fixed here so that wiring this up later does not reintroduce the bug.
     bands = {
         "fluencyCoherence": data.get("fluency_coherence"),
         "lexicalResource": data.get("lexical_resource"),
         "grammarAccuracy": data.get("grammar_accuracy"),
-        "taskResponse": data.get("task_response"),
+        "pronunciation": data.get("pronunciation"),
     }
+
+    # The acoustic measure a transcript cannot carry.
+    #
+    # Fluency and Coherence depends on pausing, hesitation and pace. None of
+    # that survives transcription, so a judge reading only the transcript
+    # correctly declines to score it and returns null. The measurement it
+    # needs already exists in the same response.
+    #
+    # It is attached as what it is: a measure on its own 0-100 scale, under
+    # its own key. It is deliberately NOT converted into a band. No mapping
+    # from that scale to the 0-9 band scale has been fitted against real Test
+    # Report Forms, and a number an examiner would not recognise is worse
+    # than an empty cell.
+    fc = bands.get("fluencyCoherence")
+    if isinstance(fc, dict) and fc.get("band") is None and pronunciation_score is not None:
+        fc["acoustic"] = {
+            "value": pronunciation_score,
+            "scale": "0-100",
+            "source": "acoustic pipeline, same response",
+            "note": "Not a band. No fitted mapping to the 0-9 scale exists yet.",
+        }
     overall_band = data.get("overall_band")
     overall_score = round(float(overall_band) * 10) if overall_band else None
     return {
