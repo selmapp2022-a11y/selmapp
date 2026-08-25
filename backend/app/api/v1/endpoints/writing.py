@@ -37,6 +37,10 @@ ai_service = AIService()
 # v9 writing endpoint; sending anything else returns error_invalid_parameters.
 ALLOWED_TASK_TYPES = {"chat-writing", "essay-writing", "short-writing"}
 
+# The vendor's own limit, quoted from its rejection:
+#   "answer length 58799 should be between 1 and 4096"
+MAX_ANSWER_CHARS = 4096
+
 # Writing Prompt Endpoints
 @router.get("/prompts/", response_model=List[WritingPromptResponse])
 async def get_writing_prompts(
@@ -552,6 +556,46 @@ async def assess_writing_direct(
     is kept for the learning app, whose free-practice screens have no exam
     definition to read it from.
     """
+    # Two requirements of the bound judge, checked here rather than paid for
+    # with a round trip. Both were discovered on 2026-08-25 by reading its
+    # rejections in the production log once failures stopped being swallowed:
+    #
+    #   prompt parameter has invalid value ''
+    #   answer length 58799 should be between 1 and 4096
+    #
+    # The first one matters more than it looks. This assessor scores a
+    # response AGAINST A TASK — task achievement is one of its four criteria
+    # — so it refuses a submission with no task. Every call this app has ever
+    # made without a prompt was rejected by the vendor, and the rejection was
+    # then covered up: first by a fall-through to a differently-scaled judge,
+    # then by a fixed 70. Free-practice screens that let a user write with no
+    # prompt have therefore never produced a real score. They now get a clear
+    # 422 saying what is missing, instead of a number that was never earned.
+    #
+    # 422 rather than 503 on purpose: this is the caller's request being
+    # incomplete, not the judge being down. It is also the only status whose
+    # body survives — the platform gateway replaces 5xx bodies with its own
+    # error page, so a 503's detail never reaches the client.
+    if not (prompt or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "A task is required. This assessor scores the response against the task it was set, and one of its four criteria is task achievement.",
+                "field": "prompt",
+            },
+        )
+
+    if len(text) > MAX_ANSWER_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "The response is longer than the judge accepts.",
+                "field": "text",
+                "characters": len(text),
+                "maximum": MAX_ANSWER_CHARS,
+            },
+        )
+
     if task_type not in ALLOWED_TASK_TYPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
