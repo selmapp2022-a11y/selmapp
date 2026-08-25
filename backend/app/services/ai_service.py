@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import aiohttp
 from typing import Dict, List, Optional, Any
 import google.generativeai as genai
@@ -1093,13 +1094,27 @@ given above, judge how well the response addresses it
 (Task Achievement). For each error: show the exact wrong phrase, the
 fixed version, and one-line teaching of the underlying rule.
         
+SCORING SCALE — 0 to 100. Use these anchors. They are the definition of
+the scale, not examples:
+  90-100  No error that would be noticed. Range and control beyond the level.
+  75-89   Occasional slips that do not impede meaning. Solidly at the level.
+  60-74   Errors are noticeable and recurring but meaning is clear throughout.
+  45-59   Errors impede meaning in places. The reader has to reread.
+  30-44   Frequent breakdown. Meaning recoverable only with effort.
+  0-29    Meaning is largely not recoverable, or the response is off-task.
+
+Score each criterion independently against these anchors. Do not converge
+the four criteria toward one another and do not anchor on the numbers used
+in the JSON shape below — they are placeholders showing the format, not
+scores to reproduce.
+
         Return ONLY valid JSON (no markdown):
         {{
-            "overall_score": 75,
-            "grammar_score": 70,
-            "vocabulary_score": 80,
-            "coherence_score": 75,
-            "task_achievement_score": 78,
+            "overall_score": 0,
+            "grammar_score": 0,
+            "vocabulary_score": 0,
+            "coherence_score": 0,
+            "task_achievement_score": 0,
             
             "feedback": "Overall assessment of the writing in 2-3 sentences",
             
@@ -1163,8 +1178,30 @@ fixed version, and one-line teaching of the underlying rule.
         """
 
         try:
+            # Deterministic decoding for the writing assessor.
+            #
+            # Measured on production 2026-08-25, before this change: the same
+            # weak response scored 75 on ten of ten identical calls — exactly
+            # the placeholder value that used to sit in the JSON shape below —
+            # while a strong response moved 40 points on one criterion between
+            # two calls seconds apart. The sampler was at the model default and
+            # the scale had no definition anywhere in the prompt, so the only
+            # numeric information the model had was the example.
+            #
+            # Pin the sampler, ask for JSON directly instead of parsing it out
+            # of free text, and define the scale in the prompt.
             response = await asyncio.to_thread(
-                self.gemini_model.generate_content, prompt
+                functools.partial(
+                    self.gemini_model.generate_content,
+                    prompt,
+                    generation_config={
+                        "temperature": 0.0,
+                        "top_p": 1.0,
+                        "top_k": 1,
+                        "candidate_count": 1,
+                        "response_mime_type": "application/json",
+                    },
+                )
             )
             
             # Parse the response
