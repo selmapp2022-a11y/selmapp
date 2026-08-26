@@ -13,6 +13,17 @@ from app.services.speaking_eval_service import SpeakingEvaluationService
 router = APIRouter()
 
 
+# The dialects the speech path serves. Unlike the writing endpoint — which
+# accepts four and *serves* two, because SpeechAce refuses French for written
+# expression — the speech endpoint genuinely serves all four.
+#
+# Validated rather than passed through, for the reason step 06 established on
+# the writing side: an unsupported value reaches the vendor, the vendor
+# refuses, our 503 is replaced by the platform gateway's own error page, and
+# the candidate sees an opaque 504. A 422 with the list in it is readable.
+ALLOWED_SPEECH_DIALECTS = {"en-us", "en-gb", "fr-fr", "fr-ca"}
+
+
 # _generate_ielts_feedback was removed on 2026-08-25.
 #
 # It was a Gemini IELTS-Speaking examiner with no call site anywhere in
@@ -65,6 +76,25 @@ async def evaluate_speech(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
+    # `language` is the exam definition's locale, sent by the exam runner. It
+    # decides the acoustic model the response is scored against, so it is not
+    # a presentation detail: a Quebec speaker scored at en-us is being marked
+    # on the wrong instrument, and until 2026-08-26 every one of them was.
+    dialect = (language or "").strip().lower()
+    if dialect not in ALLOWED_SPEECH_DIALECTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "unsupported_dialect",
+                "message": (
+                    f"The speech scorer does not serve '{language}'. "
+                    "The dialect comes from the exam definition's locale."
+                ),
+                "requested": language,
+                "allowed": sorted(ALLOWED_SPEECH_DIALECTS),
+            },
+        )
+
     try:
         audio_bytes = await audio.read()
         if not audio_bytes:
@@ -119,6 +149,7 @@ async def evaluate_speech(
             duration_ms=duration_ms,
             audio_bytes=audio_bytes,  # Pass audio for Speechace assessment
             user_id=str(current_user.id) if current_user else None,
+            dialect=dialect,
         )
 
         # 3) Shape to response model (camelCase, required fields)

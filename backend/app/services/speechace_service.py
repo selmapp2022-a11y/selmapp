@@ -92,7 +92,8 @@ class SpeechaceService:
         reference_text: str,
         user_id: Optional[str] = None,
         include_phoneme_scores: bool = True,
-        include_fluency: bool = True
+        include_fluency: bool = True,
+        dialect: str = "en-us",
     ) -> Dict[str, Any]:
         """
         Assess pronunciation using Speechace API.
@@ -158,8 +159,16 @@ class SpeechaceService:
                                 "raw_response": response_data
                             }
 
-            # Build params common
-            params = {"key": self.api_key, "dialect": "en-us"}
+            # Build params common.
+            #
+            # `dialect` was hardcoded to "en-us" here until 2026-08-26. This is
+            # the live acoustic-scoring path, so every French response the
+            # product has ever scored was scored against an English model —
+            # pronunciation, fluency and phoneme feedback all judged on the
+            # wrong instrument. It also meant the fr-fr against fr-ca question
+            # could not be asked at all, because nothing could vary the
+            # parameter. It now comes from the exam definition's locale.
+            params = {"key": self.api_key, "dialect": dialect}
 
             # Strategy: if reference_text exists, use text scoring; otherwise open-ended speech.
             if use_open_ended:

@@ -62,6 +62,7 @@ class SpeechAcePremiumService:
         audio_bytes: bytes,
         relevance_context: Optional[str] = None,
         user_id: Optional[str] = None,
+        dialect: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Score a free-form spoken response.
 
@@ -73,7 +74,7 @@ class SpeechAcePremiumService:
         if not audio_bytes:
             return {"success": False, "error": "Empty audio"}
 
-        params = {"key": self.api_key, "dialect": self.dialect}
+        params = {"key": self.api_key, "dialect": dialect or self.dialect}
         form = aiohttp.FormData()
         form.add_field("user_audio_file", audio_bytes, filename="audio.webm", content_type="audio/webm")
         if relevance_context:
@@ -87,15 +88,14 @@ class SpeechAcePremiumService:
         returns ``{success, text, confidence, words}``. Uses the
         open-ended endpoint and only surfaces the transcript field.
 
-        NOTE: still discards ``language_code``. The writing path now takes
-        its dialect from the exam definition; the SPEECH path does not, and
-        that is the bigger of the two, because dialect drives acoustic
-        scoring and a Quebec speaker judged against fr-fr — or against
-        en-us — is being marked on the wrong instrument. Out of scope for
-        step 06 and written down rather than quietly left.
+        ``language_code`` arrives as a BCP-47 tag (``fr-CA``) and reaches
+        SpeechAce as a lowercase dialect (``fr-ca``). It was discarded here
+        until 2026-08-26, which is the second half of the defect step 06
+        fixed on the writing side.
         """
-        del language_code
-        result = await self.score_open_ended(audio_bytes)
+        result = await self.score_open_ended(
+            audio_bytes, dialect=(language_code or "").lower() or None
+        )
         if not result.get("success"):
             return {"success": False, "error": result.get("error")}
         data = result.get("data") or {}
@@ -114,11 +114,12 @@ class SpeechAcePremiumService:
         question_prompt: str,
         task_type: str = "answer-question",
         user_id: Optional[str] = None,
+        dialect: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Score audio against a specific prompt for task achievement."""
         if not self.api_key:
             return {"success": False, "error": "SPEECHACE_API_KEY not configured"}
-        params = {"key": self.api_key, "dialect": self.dialect}
+        params = {"key": self.api_key, "dialect": dialect or self.dialect}
         form = aiohttp.FormData()
         form.add_field("user_audio_file", audio_bytes, filename="audio.webm", content_type="audio/webm")
         form.add_field("question_prompt", question_prompt)

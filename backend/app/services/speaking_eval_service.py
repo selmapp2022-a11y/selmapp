@@ -35,7 +35,11 @@ class SpeakingEvaluationService:
         duration_ms: int,
         audio_bytes: Optional[bytes] = None,
         user_id: Optional[str] = None,
+        dialect: str = "en-us",
     ) -> Dict[str, Any]:
+        """`dialect` is exam data, not a constant. It reaches SpeechAce as the
+        acoustic model to score against; the caller takes it from the exam
+        definition's locale and validates it before we are called."""
         # Basic metrics
         acc = compute_alignment(reference_text, transcript_text)
         flu = compute_fluency(transcript_words)
@@ -45,7 +49,8 @@ class SpeakingEvaluationService:
             speechace_result = await self.speechace_service.assess_pronunciation(
                 audio_bytes=audio_bytes,
                 reference_text=reference_text,
-                user_id=user_id
+                user_id=user_id,
+                dialect=dialect,
             )
 
             if speechace_result["success"]:
