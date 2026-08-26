@@ -37,6 +37,16 @@ ai_service = AIService()
 # v9 writing endpoint; sending anything else returns error_invalid_parameters.
 ALLOWED_TASK_TYPES = {"chat-writing", "essay-writing", "short-writing"}
 
+# The dialects this product examines in. `dialect` is exam data in exactly
+# the same way `task_type` is: the exam definition already declares
+# `language` and `locale`, and until 2026-08-27 the service ignored both and
+# sent en-us for every call in every language. That is why the fr-fr against
+# fr-ca question had never been measurable — nothing could ask it.
+#
+# The list is the four the product needs, not the vendor's full catalogue,
+# because a value nobody has tested is not a value worth accepting.
+ALLOWED_DIALECTS = {"en-us", "en-gb", "fr-fr", "fr-ca"}
+
 # The vendor's own limit, quoted from its rejection:
 #   "answer length 58799 should be between 1 and 4096"
 MAX_ANSWER_CHARS = 4096
@@ -537,6 +547,8 @@ async def assess_writing_direct(
     user_level: str = Body(default=None),
     prompt: str = Body(default=""),
     task_type: str = Body(default="short-writing"),
+    dialect: str = Body(default="en-us"),
+    report_band: Optional[bool] = Body(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ) -> Any:
@@ -596,6 +608,28 @@ async def assess_writing_direct(
             },
         )
 
+    if dialect not in ALLOWED_DIALECTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Unknown dialect.",
+                "given": dialect,
+                "allowed": sorted(ALLOWED_DIALECTS),
+            },
+        )
+
+    # There is no IELTS band for French.
+    #
+    # The band scale belongs to one English examination. Emitting it for a
+    # French script is not an approximation, it is a category error — and on
+    # a French page it would be read as a real number by exactly the
+    # candidate least able to know it is meaningless. TCF reports 0-20 and
+    # converts to NCLC; TEF reports /450.
+    #
+    # The caller may state it outright; when it does not, the language of
+    # the dialect decides, because the band scale exists only for English.
+    band_wanted = report_band if report_band is not None else dialect.startswith("en")
+
     if task_type not in ALLOWED_TASK_TYPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -621,6 +655,7 @@ async def assess_writing_direct(
                 question_prompt=prompt or None,
                 user_id=str(current_user.id),
                 task_type=task_type,
+                dialect=dialect,
             )
         except Exception:
             sa_resp = {"success": False}
@@ -644,45 +679,78 @@ async def assess_writing_direct(
                 except Exception:
                     return None
 
-            # Map SpeechAce 0-100 scale into the same fields the UI expects.
+            raw = {
+                "overall": _f(sa_score, "overall"),
+                "grammar": _f(sa_score, "grammar"),
+                "vocabulary": _f(sa_score, "vocab"),
+                "coherence": _f(sa_score, "coherence"),
+                # The writing endpoint calls this `task_response`;
+                # `relevance` is the speech endpoint's name for it.
+                "task_achievement": _f(sa_score, "task_response") or _f(sa_score, "relevance"),
+            }
+
+            # A response with correct grammar that answers the wrong
+            # question does not have zero grammar.
+            #
+            # The judge returns 0 on every criterion, and CEFR A0, when it
+            # decides the response does not address the task. Passing that
+            # through as `grammar: 0` made a genuine off-topic answer
+            # indistinguishable from a bug that sent the wrong prompt, and
+            # zero grammar is not something an examiner awards for an
+            # off-topic script.
+            #
+            # So it is reported as a VERDICT, not as scores, and the criteria
+            # are null rather than zero: the judge did not measure them.
+            # Whether a response addressed the task is the deterministic
+            # gate's decision — `GateRule.off_topic` in the exam definitions
+            # is where it is made. This endpoint only stops lying about it.
+            markable = any((v or 0) > 0 for v in raw.values())
+
+            assessment = {
+                "markable": markable,
+                "scores": raw if markable else {k: None for k in raw},
+                "cefr": cefr or None,
+                "feedback": ts.get("feedback_text") or (
+                    "Detailed scores from SpeechAce. Review the highlights below."
+                    if markable else
+                    "This response was not marked: it does not address the task it was "
+                    "set. That is a verdict about the task, not a measurement of the "
+                    "language."
+                ),
+                "strengths": ts.get("strengths") or [],
+                "weaknesses": ts.get("weaknesses") or [],
+                "errors": ts.get("errors") or [],
+                "vocabulary_suggestions": ts.get("vocabulary_suggestions") or [],
+                "suggestions": ts.get("suggestions") or [],
+                "next_steps": [],
+                "corrected_version": ts.get("corrected_text"),
+                "recommended_exercises": [],
+            }
+
+            # The band block is emitted only for an exam that reports bands,
+            # and only for a response the judge actually marked. A band of
+            # 0.0 on an unmarked script is the same lie as a grammar of 0.
+            if band_wanted and markable:
+                assessment["ielts_band"] = _f(ielts, "overall")
+                assessment["ielts_bands"] = {
+                    "task_response": _f(ielts, "task_response"),
+                    "vocab": _f(ielts, "vocab"),
+                    "coherence": _f(ielts, "coherence"),
+                    "grammar": _f(ielts, "grammar"),
+                }
+
             return {
                 "success": True,
-                "assessment": {
-                    "scores": {
-                        "overall": int(_f(sa_score, "overall") or 0),
-                        "grammar": int(_f(sa_score, "grammar") or 0),
-                        "vocabulary": int(_f(sa_score, "vocab") or 0),
-                        "coherence": int(_f(sa_score, "coherence") or 0),
-                        # The writing endpoint calls this `task_response`;
-                        # `relevance` is the speech endpoint's name for it.
-                        "task_achievement": int(
-                            _f(sa_score, "task_response") or _f(sa_score, "relevance") or 0
-                        ),
-                    },
-                    "ielts_band": _f(ielts, "overall"),
-                    "ielts_bands": {
-                        "task_response": _f(ielts, "task_response"),
-                        "vocab": _f(ielts, "vocab"),
-                        "coherence": _f(ielts, "coherence"),
-                        "grammar": _f(ielts, "grammar"),
-                    },
-                    "cefr": cefr or None,
-                    "feedback": ts.get("feedback_text") or "Detailed scores from SpeechAce. Review the highlights below.",
-                    "strengths": ts.get("strengths") or [],
-                    "weaknesses": ts.get("weaknesses") or [],
-                    "errors": ts.get("errors") or [],
-                    "vocabulary_suggestions": ts.get("vocabulary_suggestions") or [],
-                    "suggestions": ts.get("suggestions") or [],
-                    "next_steps": [],
-                    "corrected_version": ts.get("corrected_text"),
-                    "recommended_exercises": [],
-                },
+                "assessment": assessment,
                 "metadata": {
                     "word_count": len(text.split()),
                     "character_count": len(text),
                     "writing_type": writing_type,
                     "user_level": level,
                     "task_type": task_type,
+                    "dialect": dialect,
+                    "reports_band": bool(band_wanted),
+                    "markable": markable,
                     "scorer": "speechace_premium",
                 },
             }

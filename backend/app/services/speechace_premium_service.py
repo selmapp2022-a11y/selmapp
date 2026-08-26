@@ -47,6 +47,12 @@ class SpeechAcePremiumService:
 
     def __init__(self) -> None:
         self.api_key: Optional[str] = getattr(settings, "SPEECHACE_API_KEY", None)
+        # The default only. `dialect` is exam data — the exam definition
+        # declares `language` and `locale` — and every scoring call should
+        # pass it. It stayed a constant here until 2026-08-27, which is why
+        # every French response the product has ever scored was scored as
+        # English, and why the fr-fr against fr-ca question had never been
+        # measurable: nothing could ask it.
         self.dialect: str = "en-us"
 
     # ─── public — Live Conversation / IELTS ────────────────────────
@@ -79,8 +85,16 @@ class SpeechAcePremiumService:
     async def transcribe(self, audio_bytes: bytes, language_code: str = "en-US") -> Dict[str, Any]:
         """Drop-in replacement for ``GoogleSTTService.transcribe`` —
         returns ``{success, text, confidence, words}``. Uses the
-        open-ended endpoint and only surfaces the transcript field."""
-        del language_code  # SpeechAce premium endpoint is locked to en-us today
+        open-ended endpoint and only surfaces the transcript field.
+
+        NOTE: still discards ``language_code``. The writing path now takes
+        its dialect from the exam definition; the SPEECH path does not, and
+        that is the bigger of the two, because dialect drives acoustic
+        scoring and a Quebec speaker judged against fr-fr — or against
+        en-us — is being marked on the wrong instrument. Out of scope for
+        step 06 and written down rather than quietly left.
+        """
+        del language_code
         result = await self.score_open_ended(audio_bytes)
         if not result.get("success"):
             return {"success": False, "error": result.get("error")}
@@ -121,6 +135,7 @@ class SpeechAcePremiumService:
         question_prompt: Optional[str] = None,
         user_id: Optional[str] = None,
         task_type: str = "short-writing",
+        dialect: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Score a piece of written English against IELTS/CEFR rubrics.
 
@@ -146,7 +161,11 @@ class SpeechAcePremiumService:
             return {"success": False, "error": "SPEECHACE_API_KEY not configured"}
         if not (text or "").strip():
             return {"success": False, "error": "Empty text"}
-        params = {"key": self.api_key, "dialect": self.dialect, "task_type": task_type}
+        params = {
+            "key": self.api_key,
+            "dialect": dialect or self.dialect,
+            "task_type": task_type,
+        }
         form = aiohttp.FormData()
         form.add_field("answer", text)
         if question_prompt:
