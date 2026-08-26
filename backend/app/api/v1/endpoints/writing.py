@@ -47,6 +47,24 @@ ALLOWED_TASK_TYPES = {"chat-writing", "essay-writing", "short-writing"}
 # because a value nobody has tested is not a value worth accepting.
 ALLOWED_DIALECTS = {"en-us", "en-gb", "fr-fr", "fr-ca"}
 
+# ...but the WRITING scorer serves only the English two.
+#
+# Measured against the vendor on 2026-08-27: fr-fr and fr-ca both come back
+#
+#   {"status": "error", "short_message": "error_feature_unavailable",
+#    "detail_message": "The requested feature is not available in fr-ca dialect."}
+#
+# Without this list a French exam definition sends fr-ca, the vendor refuses,
+# the endpoint correctly declines to substitute a judge, and the platform
+# gateway replaces the 503 body with its own page — so the caller gets an
+# opaque 504 and no reason. Rejecting it here turns that into a 422 that says
+# what is actually wrong, and puts the finding where the next person to bind
+# a French judge will see it.
+#
+# The SPEECH endpoint does accept fr-fr and fr-ca. This limit is the writing
+# scorer's, not the vendor's.
+WRITING_DIALECTS = {"en-us", "en-gb"}
+
 # The vendor's own limit, quoted from its rejection:
 #   "answer length 58799 should be between 1 and 4096"
 MAX_ANSWER_CHARS = 4096
@@ -615,6 +633,20 @@ async def assess_writing_direct(
                 "message": "Unknown dialect.",
                 "given": dialect,
                 "allowed": sorted(ALLOWED_DIALECTS),
+            },
+        )
+
+    if dialect not in WRITING_DIALECTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "This judge does not assess writing in that dialect.",
+                "given": dialect,
+                "served": sorted(WRITING_DIALECTS),
+                "vendor_says": "error_feature_unavailable — the requested feature "
+                               "is not available in that dialect",
+                "note": "The speech endpoint does accept fr-fr and fr-ca. "
+                        "No written-French scorer is bound yet.",
             },
         )
 
