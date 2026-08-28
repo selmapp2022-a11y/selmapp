@@ -59,7 +59,13 @@ class PersonalTrainerAIService:
             # Generate personalized learning plan using AI
             prompt = self._create_daily_plan_prompt(user_profile, progress_analytics, focus_skills)
             
-            ai_result = await self.ai_service.gemini_model.generate_content(prompt)
+            # generate_content is SYNCHRONOUS; awaiting it directly raised
+            # "object GenerateContentResponse can't be used in 'await'
+            # expression" and made the daily plan fail for every language.
+            # Every other call in this file already wraps it in to_thread.
+            ai_result = await asyncio.to_thread(
+                self.ai_service.gemini_model.generate_content, prompt
+            )
             
             try:
                 plan_data = json.loads(ai_result.text)
@@ -338,6 +344,7 @@ class PersonalTrainerAIService:
             # plan is generated in this language; reading it off a dead per-user
             # column made a TCF candidate's plan come back in English.
             "target_language": profile_for(language).english_name,
+            "language_code": profile_for(language).code,
             "learning_goals": onboarding.learning_goals if onboarding else [],
             "preferred_categories": preferred_categories,
             "learning_style": onboarding.preferred_learning_style if onboarding else "mixed",
@@ -466,9 +473,12 @@ class PersonalTrainerAIService:
         focus_skills: List[str]
     ) -> str:
         """Create AI prompt for daily learning plan generation"""
-        
+
+        lang = profile_for(user_profile.get("language_code", "en"))
         return f"""
-        Create a personalized daily English learning plan for this learner.
+        Create a personalized daily {lang.english_name} learning plan for this learner.
+        {lang.write_in} Every title, description, objective and activity name in the
+        JSON below must be written in {lang.english_name}.
         
         Learner Profile:
         - CEFR Level: {user_profile.get('current_level')}

@@ -406,6 +406,7 @@ async def _get_user_profile_for_trainer(db: AsyncSession, user: User, language: 
         "native_language": user.native_language,
         # From the goal's exam (deprecated column user.target_language no longer read).
         "target_language": profile_for(language).english_name,
+        "language_code": profile_for(language).code,
         "learning_goals": onboarding.learning_goals if onboarding else [],
         "preferred_categories": preferred_categories,
         "learning_style": onboarding.preferred_learning_style if onboarding else "mixed",
