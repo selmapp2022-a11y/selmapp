@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api import deps
 from app.models.user import User
@@ -121,7 +121,7 @@ class PlanPayload(BaseModel):
     language: str            # "fr-CA" | "en"
     exam: str
     target: Target
-    attestation: Attestation = Attestation()
+    attestation: Attestation = Field(default_factory=Attestation)
     days_remaining: Optional[int] = None
     fits_in_time: bool = True
     slots: List[Slot]
