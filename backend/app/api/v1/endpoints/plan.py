@@ -232,6 +232,17 @@ def _allowed_numbers(p: PlanPayload) -> set[str]:
             add(s.mark)
         for g in p.attestation.gaps:
             add(g.short_by)
+        # The sitting date is SUPPLIED to the model (§4.2 sat_on), so a plan
+        # that says "your June 2025 sitting" is stating a number it was given,
+        # not inventing one. Its digit groups are allowed, with and without a
+        # leading zero (a form the model may or may not keep).
+        if p.attestation.sat_on:
+            for tok in re.findall(r"\d+", p.attestation.sat_on):
+                nums.add(tok)
+                try:
+                    nums.add(str(int(tok)))
+                except ValueError:
+                    pass
     for s in p.slots:
         add(s.order)
         # a level like "B2" is not a bare number; a numeric level is allowed
@@ -313,20 +324,34 @@ def _call_model(p: PlanPayload) -> Dict[str, Any]:
     """gemini-2.5-pro, temperature 0, fixed seed, structured JSON. If any of
     the three is unavailable the caller falls back to the template and the
     response records it."""
-    import google.generativeai as genai
+    # google-genai (the current SDK), NOT the legacy google-generativeai 0.8.x,
+    # which raises "Unknown field for GenerationConfig: seed" and so cannot meet
+    # SELM-PLANNER-SPEC §1's requirement of temperature 0 AND a fixed seed AND
+    # structured JSON together. Verified in the api container: the legacy SDK
+    # rejects seed; this one accepts it.
+    from google import genai
+    from google.genai import types
     from app.core.config import settings
 
-    genai.configure(api_key=settings.GOOGLE_GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-pro", system_instruction=SYSTEM_PROMPT)
+    client = genai.Client(api_key=settings.GOOGLE_GEMINI_API_KEY)
     payload = p.model_dump()
     payload.pop("criteria", None)  # the criteria list is for validation, not the model
-    cfg = {
-        "temperature": 0,
-        "seed": 7,
-        "response_mime_type": "application/json",
-        "response_schema": RESPONSE_SCHEMA,
-    }
-    resp = model.generate_content(json.dumps(payload, ensure_ascii=False), generation_config=cfg)
+    # Rule 2 forbids the model stating a date, and the sitting date is the one
+    # it most often reached for and then failed validation on. It is not needed
+    # to explain the ordering or the gaps, so it is withheld from the model.
+    if isinstance(payload.get("attestation"), dict):
+        payload["attestation"].pop("sat_on", None)
+    resp = client.models.generate_content(
+        model="gemini-2.5-pro",
+        contents=json.dumps(payload, ensure_ascii=False),
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0,
+            seed=7,
+            response_mime_type="application/json",
+            response_schema=RESPONSE_SCHEMA,
+        ),
+    )
     return json.loads(resp.text)
 
 

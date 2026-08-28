@@ -38,6 +38,7 @@ botocore==1.35.36
 
 # AI / TTS
 google-generativeai==0.8.3
+google-genai==2.20.0
 gTTS==2.5.3
 
 # Audio processing
