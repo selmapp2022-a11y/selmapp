@@ -44,6 +44,17 @@ class ElevenLabsASRService:
         form = aiohttp.FormData()
         form.add_field("model_id", DEFAULT_MODEL_ID)
         form.add_field("language_code", lang)
+        # Pin verbatim ON explicitly. Scribe defaults no_verbatim=false, which
+        # keeps filler words, false starts and pauses — and the fluency scoring
+        # downstream DEPENDS on those: strip the hesitations and a halting
+        # answer reads as fluent. The default is currently correct, but the
+        # whole pronunciation/fluency path rests on it, so it is set here
+        # rather than inherited, where a vendor default change could flip it
+        # silently. timestamps_granularity defaults to "word", which is the
+        # single timing source the annotated playback uses; set it too so the
+        # word list the client aligns against can never quietly change shape.
+        form.add_field("no_verbatim", "false")
+        form.add_field("timestamps_granularity", "word")
         # Send raw bytes — Scribe sniffs the format. We label as audio/webm
         # since the browser MediaRecorder ships webm/opus by default.
         form.add_field(
