@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.crud.content import vocabulary_crud
 from app.models.content import DifficultyLevel, Vocabulary
 from app.models.reading import ReadingTextType
+from app.services.language_profile import profile_for
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class AIReadingService:
         vocabulary_count: int = 10,
         include_comprehension_questions: bool = True,
         original_text: Optional[str] = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         """
         Generate reading text using leveled vocabulary from database.
@@ -69,7 +71,7 @@ class AIReadingService:
         if original_text and original_text.strip():
             text_content = original_text.strip()
             vocab_list = await self._extract_vocabulary_from_text(
-                text_content, level, vocabulary_count
+                text_content, level, vocabulary_count, language=language
             )
             result = {
                 "text_content": text_content,
@@ -78,10 +80,14 @@ class AIReadingService:
                 "text_type": text_type.value,
                 "topic": topic,
                 "word_count": len(text_content.split()),
+                # Echoed back so the caller can never be in doubt about what
+                # language it just received. The old code returned an English
+                # passage whatever was asked for, silently.
+                "language": profile_for(language).code,
             }
             if include_comprehension_questions:
                 questions = await self._generate_comprehension_questions(
-                    text_content, level, vocab_list
+                    text_content, level, vocab_list, language=language
                 )
                 result["comprehension_questions"] = questions
             return result
@@ -118,7 +124,7 @@ class AIReadingService:
 
         # Generate the reading text
         text_content = await self._generate_text_content(
-            level, text_type, topic, word_count, vocab_list, seed=seed
+            level, text_type, topic, word_count, vocab_list, seed=seed, language=language
         )
 
         result = {
@@ -131,12 +137,13 @@ class AIReadingService:
             # Voice hint for the TTS layer — pass into
             # `tts.generate_audio_content(speaker_config=[{"voice_category": ...}])`
             "voice_category": seed.get("voice_category"),
+            "language": profile_for(language).code,
         }
 
         # Generate comprehension questions if requested
         if include_comprehension_questions and text_content:
             questions = await self._generate_comprehension_questions(
-                text_content, level, vocab_list
+                text_content, level, vocab_list, language=language
             )
             result["comprehension_questions"] = questions
 
@@ -147,6 +154,7 @@ class AIReadingService:
         text: str,
         level: DifficultyLevel,
         count: int,
+        language: str = "en",
     ) -> List[Dict[str, Any]]:
         """Pick `count` interesting / level-appropriate words *from the user's text*
         and return definitions + examples for them. Used when the user pasted
@@ -156,7 +164,8 @@ class AIReadingService:
             return []
         from app.services.prompt_library import cefr_block
 
-        prompt = f"""You are an English-language tutor. From the passage
+        lang = profile_for(language)
+        prompt = f"""You are {lang.tutor}. {lang.write_in} From the passage
 below, pick exactly {count} vocabulary items that genuinely repay
 study at this learner's level. Prefer words that:
   • actually appear in the text,
@@ -257,6 +266,7 @@ Return ONLY a valid JSON array (no markdown fences):
         word_count: int,
         vocabulary_list: List[Dict[str, Any]],
         seed: Optional[Dict[str, Any]] = None,
+        language: str = "en",
     ) -> str:
         """Generate the actual reading text content - produces meaningful, comprehensive passages.
 
@@ -339,7 +349,8 @@ Return ONLY a valid JSON array (no markdown fences):
 
         level_info = level_guidelines.get(level, level_guidelines[DifficultyLevel.B1])
 
-        prompt = f"""You are an expert English-language writer producing
+        lang = profile_for(language)
+        prompt = f"""You are {lang.writer}. {lang.write_in} You are producing
 authentic reading material for adult learners. Write the {text_type.value}
 below — a real piece of writing, not a textbook exercise.
 
@@ -409,7 +420,8 @@ Write ONLY the {text_type.value} content. Start directly with the title
         self,
         text_content: str,
         level: DifficultyLevel,
-        vocabulary_list: List[Dict[str, Any]]
+        vocabulary_list: List[Dict[str, Any]],
+        language: str = "en",
     ) -> List[Dict[str, Any]]:
         """Generate comprehension questions for the text"""
         
@@ -417,7 +429,8 @@ Write ONLY the {text_type.value} content. Start directly with the title
 
         target_vocab = ", ".join([v.get("word", "") for v in vocabulary_list if v.get("word")][:8])
 
-        prompt = f"""Create 5 comprehension questions based on the passage
+        lang = profile_for(language)
+        prompt = f"""{lang.write_in} Create 5 comprehension questions based on the passage
 below. The questions must test real understanding, not surface recall —
 a strong reader at this level should still need to think.
 

@@ -26,6 +26,11 @@ class GenerateReadingTextRequest(BaseModel):
     # generating comprehension questions) instead of inventing a new passage on
     # `topic`. Powers the "Paste any English text" flow on the Reading page.
     original_text: Optional[str] = Field(default=None, description="User-provided text to analyse instead of generating fresh content")
+    # 2026-08-28. This field did not exist, and its absence WAS the blocker:
+    # the service could only ever be asked for English because there was no
+    # way to ask for anything else. Amendment 2 §2.3. Defaults to English so
+    # every existing caller is unchanged.
+    language: str = Field(default="en", description="Target language of the generated text: 'en' or 'fr'")
 
 class GenerateReadingTextResponse(BaseModel):
     text_content: str
@@ -75,6 +80,7 @@ async def generate_reading_text(
             vocabulary_count=request.vocabulary_count,
             include_comprehension_questions=request.include_questions,
             original_text=request.original_text,
+            language=request.language,
         )
         
         reading_text_id = None

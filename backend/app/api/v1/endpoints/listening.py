@@ -38,6 +38,7 @@ from app.models.user import User
 from app.services.gemini_tts_service import get_tts_service
 from app.services.audio_healing_service import audio_healing_service
 from app.services.audio_storage_service import audio_storage_service
+from app.services.language_profile import profile_for, SUPPORTED
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ async def generate_listening_exercise(
     topic: str = Body(..., min_length=2),
     difficulty_level: str = Body(default=None),
     content_type: str = Body(default="conversation"),
+    # 2026-08-28, Amendment 2 §2.3. Same absence as ai_reading: the endpoint
+    # could only be asked for English because there was no field to ask with.
+    language: str = Body(default="en"),
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db)
 ) -> Dict[str, Any]:
@@ -83,7 +87,14 @@ async def generate_listening_exercise(
         # Cache key carries a generation version. Bump when the audio
         # generation strategy changes so old single-voice clips don't
         # serve forever. v2 = ElevenLabs v3 multi-speaker dialogue.
-        cache_key = f"listening:v2:{current_user.id}:{topic.lower().replace(' ', '_')}:{level}"
+        # 2026-08-28: the language is part of the key, and leaving it out was
+        # a bug waiting to happen — a French request would have been served a
+        # cached English exercise for the same topic and level, silently, and
+        # the candidate would have had no way to tell it from a generation
+        # failure. Bumped to v3 so nothing generated before this change is
+        # served as French.
+        _lang = profile_for(language).code
+        cache_key = f"listening:v3:{current_user.id}:{_lang}:{topic.lower().replace(' ', '_')}:{level}"
         
         result_query = await db.execute(
             select(GeneratedContentCache).where(
@@ -127,7 +138,8 @@ async def generate_listening_exercise(
             topic=topic,
             difficulty_level=level,
             content_type=content_type,
-            speaker_names=["Dr. Anya", "Liam"] if content_type == "conversation" else ["Narrator"]
+            language=_lang,
+            speaker_names=_speaker_names(_lang, content_type),
         )
         
         if result.get("success"):
@@ -264,11 +276,13 @@ async def check_audio_status(
                         level = parts[1] if len(parts) > 1 else 'B1'
                         
                         tts_service = await get_tts_service()
+                        _rl = _language_of_cache_key(getattr(cached, "cache_key", ""))
                         regen_result = await tts_service.generate_listening_content(
                             topic=topic,
                             difficulty_level=level,
                             content_type="conversation",
-                            speaker_names=["Dr. Anya", "Liam"]
+                            language=_rl,
+                            speaker_names=_speaker_names(_rl, "conversation"),
                         )
                         
                         if regen_result.get("success") and regen_result.get("audio_url"):
@@ -369,11 +383,13 @@ async def regenerate_audio(
         # Get TTS service and regenerate
         tts_service = await get_tts_service()
         
+        _rl = _language_of_cache_key(cached_items[0].cache_key if cached_items else "")
         result = await tts_service.generate_listening_content(
             topic=topic,
             difficulty_level=level,
             content_type="conversation",
-            speaker_names=["Dr. Anya", "Liam"]
+            language=_rl,
+            speaker_names=_speaker_names(_rl, "conversation"),
         )
         
         if result.get("success") and result.get("audio_url"):
@@ -463,12 +479,16 @@ async def heal_listening_audio_cache(
 # exercises to play with TWO distinct voices instead of one narrator
 # reading both speakers' lines. This helper takes the Gemini-generated
 # transcript ("Name: line\n…"), assigns each unique speaker a
-# rotating American voice (Rachel female, Adam male), renders each
+# rotating voice pair drawn from the language profile, renders each
 # turn through the ElevenLabs single-voice endpoint IN PARALLEL with
 # bounded concurrency so we don't blow latency, concatenates the MP3
 # chunks, and persists the result. Returns the audio_url or empty
 # string on any failure (caller then displays transcript without
 # audio rather than playing one-voice fallback).
+# 2026-08-28: these two ids were the whole voice list, so a French listening
+# exercise was read aloud by two American English voices. They now come from
+# the language profile, which is data — Amendment 2 §2.3. The constants stay
+# as the English profile's own values so nothing that read them breaks.
 _LISTENING_VOICE_FEMALE = "21m00Tcm4TlvDq8ikWAM"  # Rachel — American
 _LISTENING_VOICE_MALE = "pNInz6obpgDQGcFmaJgB"    # Adam — American
 _LISTENING_MODEL_ID = "eleven_turbo_v2_5"
@@ -477,7 +497,36 @@ _LISTENING_TTS_TIMEOUT = 15.0
 _LISTENING_TTS_CONCURRENCY = 4
 
 
-async def _render_listening_dialogue_audio(transcript: str) -> str:
+def _language_of_cache_key(cache_key: str, default: str = "en") -> str:
+    """Recover the exercise's language from its own cache key.
+
+    The key is `listening:v3:{user}:{lang}:{topic}:{level}`. A regeneration
+    path that cannot recover the language would silently re-render a French
+    exercise in English, which is the same defect this change removes —
+    moved from the request to the repair. Keys written before v3 carry no
+    language and correctly fall back to English, which is what they were.
+    """
+    parts = (cache_key or "").split(":")
+    if len(parts) >= 5 and parts[1] == "v3" and parts[3] in SUPPORTED:
+        return parts[3]
+    return default
+
+
+def _speaker_names(language: str, content_type: str) -> List[str]:
+    """Names for the roster, in the language of the exercise.
+
+    Was `["Dr. Anya", "Liam"]` for every exercise in every language. A French
+    listening comprehension whose speakers are called Dr. Anya and Liam is not
+    wrong exactly — people are called anything anywhere — but it is a tell
+    that nothing about the exercise was chosen for French, and TCF's own
+    compréhension orale is populated with French given names.
+    """
+    if content_type != "conversation":
+        return ["Narrateur"] if profile_for(language).code == "fr" else ["Narrator"]
+    return ["Claire", "Julien"] if profile_for(language).code == "fr" else ["Dr. Anya", "Liam"]
+
+
+async def _render_listening_dialogue_audio(transcript: str, language: str = "en") -> str:
     """Render a 'Name: line\\n' transcript as a multi-voice MP3.
 
     Returns the persisted audio URL, or empty string if any step
@@ -509,7 +558,10 @@ async def _render_listening_dialogue_audio(transcript: str) -> str:
     for sp, _ in turns:
         if sp not in unique_speakers:
             unique_speakers.append(sp)
-    voices = [_LISTENING_VOICE_FEMALE, _LISTENING_VOICE_MALE]
+    # Was [Rachel, Adam] — two American English voices, whatever language the
+    # transcript was in. Now the pair comes from the profile.
+    _profile = profile_for(language)
+    voices = [_profile.tts_voices["female"], _profile.tts_voices["male"]]
     voice_map: Dict[str, str] = {
         sp: voices[i % len(voices)] for i, sp in enumerate(unique_speakers)
     }
@@ -694,7 +746,7 @@ async def _generate_fallback_listening(topic: str, level: str, content_type: str
     # 2026-05-23: try to render multi-voice audio for the dialogue we
     # just generated. If anything fails, audio_url stays empty and the
     # response shape is identical to before (transcript only).
-    audio_url = await _render_listening_dialogue_audio(transcript)
+    audio_url = await _render_listening_dialogue_audio(transcript, language=language)
 
     # Fall back to the old templated questions ONLY if Gemini didn't
     # supply any. In normal operation `gemini_questions` is non-empty

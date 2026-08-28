@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - optional dependency
 from app.core.config import settings
 from app.core.cache import get_redis
 from app.services.audio_storage_service import audio_storage_service
+from app.services.language_profile import profile_for
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +363,8 @@ class GeminiTTSService:
         topic: str,
         difficulty_level: str,
         content_type: str,
-        speaker_names: Optional[List[str]] = None
+        speaker_names: Optional[List[str]] = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         """Generate an appropriate script for the listening content.
 
@@ -424,7 +426,15 @@ class GeminiTTSService:
         # Generate script prompt
         speakers_block = ", ".join(speakers_for_prompt)
 
-        prompt = f"""Write a {length_guide.get(difficulty_level, "140-200 words")} listening-practice script — a multi-speaker conversation about "{topic}".
+        # 2026-08-28, Amendment 2 §2.3. Without this line the prompt is
+        # written in English and therefore produces English, whatever voices
+        # render it. It is placed FIRST because a language instruction buried
+        # under four blocks of style rules is one the model drops.
+        _lang = profile_for(language)
+
+        prompt = f"""{_lang.write_in}
+
+Write a {length_guide.get(difficulty_level, "140-200 words")} listening-practice script — a multi-speaker conversation about "{topic}".
 
 {cefr_block(difficulty_level)}
 

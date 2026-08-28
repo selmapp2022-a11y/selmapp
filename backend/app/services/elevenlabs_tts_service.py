@@ -215,11 +215,13 @@ class ElevenLabsTTSService:
         difficulty_level: str,
         content_type: str = "conversation",
         speaker_names: Optional[List[str]] = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         # Lazy import: re-use Gemini for script generation but produce audio here.
         from app.services.gemini_tts_service import GeminiTTSService
         gemini = GeminiTTSService()
         script_result = await gemini._generate_script(
+            language=language,
             topic=topic,
             difficulty_level=difficulty_level,
             content_type=content_type,
