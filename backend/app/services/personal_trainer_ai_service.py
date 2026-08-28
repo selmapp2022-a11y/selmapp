@@ -4,6 +4,7 @@ Comprehensive AI service for personalized language learning with context-aware c
 """
 
 import asyncio
+from app.services.language_profile import profile_for
 import json
 import logging
 from typing import Dict, List, Optional, Any
@@ -39,13 +40,14 @@ class PersonalTrainerAIService:
         db: AsyncSession,
         sync_db: Session, 
         user: User,
-        focus_skills: Optional[List[str]] = None
+        focus_skills: Optional[List[str]] = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         """Generate a comprehensive daily learning plan tailored to the user"""
         
         try:
             # Get user profile and preferences
-            user_profile = await self._build_comprehensive_user_profile(db, user)
+            user_profile = await self._build_comprehensive_user_profile(db, user, language=language)
             
             # Get learning analytics
             progress_analytics = await self._get_user_progress_analytics(db, user.id)
@@ -89,12 +91,13 @@ class PersonalTrainerAIService:
         user: User,
         content_type: str,
         topic: Optional[str] = None,
-        previous_interaction_context: Optional[Dict[str, Any]] = None
+        previous_interaction_context: Optional[Dict[str, Any]] = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         """Generate content that fits perfectly into the user's learning journey"""
         
         try:
-            user_profile = await self._build_comprehensive_user_profile(db, user)
+            user_profile = await self._build_comprehensive_user_profile(db, user, language=language)
             
             # Use AI to determine the best topic if not provided
             if not topic:
@@ -123,12 +126,13 @@ class PersonalTrainerAIService:
         sync_db: Session,
         user: User,
         user_performance: Dict[str, Any],
-        exercise_context: Dict[str, Any]
+        exercise_context: Dict[str, Any],
+        language: str = "en",
     ) -> Dict[str, Any]:
         """Provide intelligent, adaptive feedback based on user's performance"""
         
         try:
-            user_profile = await self._build_comprehensive_user_profile(db, user)
+            user_profile = await self._build_comprehensive_user_profile(db, user, language=language)
             progress_analytics = await self._get_user_progress_analytics(db, user.id)
             
             # Create context-aware feedback prompt
@@ -214,12 +218,13 @@ class PersonalTrainerAIService:
         sync_db: Session,
         user: User,
         session_type: str = "mixed",  # reading, vocabulary, grammar, listening, speaking, writing, mixed
-        duration_minutes: Optional[int] = None
+        duration_minutes: Optional[int] = None,
+        language: str = "en",
     ) -> Dict[str, Any]:
         """Create a complete learning session with multiple content types"""
         
         try:
-            user_profile = await self._build_comprehensive_user_profile(db, user)
+            user_profile = await self._build_comprehensive_user_profile(db, user, language=language)
             progress_analytics = await self._get_user_progress_analytics(db, user.id)
             
             # Determine session duration
@@ -297,7 +302,9 @@ class PersonalTrainerAIService:
 
     # Private helper methods
 
-    async def _build_comprehensive_user_profile(self, db: AsyncSession, user: User) -> Dict[str, Any]:
+    async def _build_comprehensive_user_profile(
+        self, db: AsyncSession, user: User, language: str = "en"
+    ) -> Dict[str, Any]:
         """Build a comprehensive user profile for AI context"""
         # Get onboarding data - use async session
         try:
@@ -326,7 +333,11 @@ class PersonalTrainerAIService:
         return {
             "current_level": user.current_level.value,
             "native_language": user.native_language,
-            "target_language": user.target_language,
+            # From the GOAL's exam, passed by the caller, not user.target_language
+            # (deprecated — see the column comment in models/user.py). The daily
+            # plan is generated in this language; reading it off a dead per-user
+            # column made a TCF candidate's plan come back in English.
+            "target_language": profile_for(language).english_name,
             "learning_goals": onboarding.learning_goals if onboarding else [],
             "preferred_categories": preferred_categories,
             "learning_style": onboarding.preferred_learning_style if onboarding else "mixed",

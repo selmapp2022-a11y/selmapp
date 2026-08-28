@@ -173,8 +173,7 @@ async def get_user_statistics(
             "daily_goal_minutes": current_user.daily_goal_minutes,
             "preferred_study_time": current_user.preferred_study_time,
             "notification_enabled": current_user.notification_enabled,
-            "native_language": current_user.native_language,
-            "target_language": current_user.target_language
+            "native_language": current_user.native_language
         }
     }
     

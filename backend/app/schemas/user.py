@@ -12,7 +12,6 @@ class UserBase(BaseModel):
     # native_language is optional and unset by default — SELM is global.
     # Only stored when the user explicitly tells us.
     native_language: Optional[str] = None
-    target_language: str = "English"
     daily_goal_minutes: int = 30
     preferred_study_time: Optional[str] = None
     notification_enabled: bool = True
@@ -27,7 +26,6 @@ class UserUpdate(BaseModel):
     avatar_url: Optional[str] = None
     current_level: Optional[UserLevel] = None
     native_language: Optional[str] = None
-    target_language: Optional[str] = None
     daily_goal_minutes: Optional[int] = None
     preferred_study_time: Optional[str] = None
     notification_enabled: Optional[bool] = None

@@ -70,6 +70,14 @@ class User(Base):
     # presume a learner's L1. If the user sets it later we use it as a
     # hint for L1-interference patterns; otherwise prompts stay neutral.
     native_language = Column(String(50), nullable=True, default=None)
+    # DEPRECATED 2026-08-28. The language a skill is practised in comes from the
+    # GOAL's exam (examLocale -> the language param each skill sends), not from a
+    # per-user column: an Express Entry candidate may prepare BOTH exams, so one
+    # column per user is the wrong shape. No code reads this any more; it is kept
+    # rather than dropped only because DROP on the live DB is irreversible and an
+    # unread column costs nothing. **Do not read this in new code** — take the
+    # language from the request (routed through profile_for), as every skill and
+    # the personal trainer now do.
     target_language = Column(String(50), default="English")
     
     # Account status

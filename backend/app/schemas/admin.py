@@ -57,7 +57,6 @@ class AdminUserListItem(BaseModel):
 class AdminUserDetail(AdminUserListItem):
     avatar_url: Optional[str] = None
     native_language: Optional[str] = None
-    target_language: Optional[str] = None
     has_password: bool = True
     daily_goal_minutes: int = 30
     preferred_study_time: Optional[str] = None

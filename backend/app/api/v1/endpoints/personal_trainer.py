@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+from app.services.language_profile import profile_for
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -388,7 +389,7 @@ async def get_daily_recommendations(
 
 # Helper Functions
 
-async def _get_user_profile_for_trainer(db: AsyncSession, user: User) -> Dict[str, Any]:
+async def _get_user_profile_for_trainer(db: AsyncSession, user: User, language: str = "en") -> Dict[str, Any]:
     """Build comprehensive user profile for AI trainer"""
     
     # Get onboarding data - use async session
@@ -403,7 +404,8 @@ async def _get_user_profile_for_trainer(db: AsyncSession, user: User) -> Dict[st
     return {
         "current_level": user.current_level.value,
         "native_language": user.native_language,
-        "target_language": user.target_language,
+        # From the goal's exam (deprecated column user.target_language no longer read).
+        "target_language": profile_for(language).english_name,
         "learning_goals": onboarding.learning_goals if onboarding else [],
         "preferred_categories": preferred_categories,
         "learning_style": onboarding.preferred_learning_style if onboarding else "mixed",
@@ -494,6 +496,7 @@ def _get_fallback_recommendations(level) -> Dict[str, Any]:
 @router.post("/daily-plan")
 async def generate_daily_learning_plan(
     focus_skills: Optional[List[str]] = None,
+    language: str = "en",  # from the goal's exam; the plan is generated in it
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     sync_db: Session = Depends(get_sync_db)
@@ -518,7 +521,8 @@ async def generate_daily_learning_plan(
             db=db,
             sync_db=sync_db,
             user=current_user,
-            focus_skills=focus_skills
+            focus_skills=focus_skills,
+            language=language,
         )
         
         if not result.get("success"):

@@ -77,7 +77,6 @@ async def register(
         "avatar_url": user.avatar_url,
         "current_level": user.current_level.value if user.current_level else None,
         "native_language": user.native_language,
-        "target_language": user.target_language,
         "is_active": user.is_active,
         "is_verified": user.is_verified,
         "is_premium": user.is_premium,
@@ -142,7 +141,6 @@ async def login(
         "avatar_url": user.avatar_url,
         "current_level": user.current_level.value if user.current_level else None,  # Convert enum to string
         "native_language": user.native_language,
-        "target_language": user.target_language,
         "is_active": user.is_active,
         "is_verified": user.is_verified,
         "is_premium": user.is_premium,

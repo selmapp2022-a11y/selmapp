@@ -29,7 +29,6 @@ class UserCreate(BaseModel):
     full_name: Optional[str] = None
     # SELM is a global app — no default native language assumption.
     native_language: Optional[str] = None
-    target_language: Optional[str] = "English"
 
 class OAuth2UserCreate(BaseModel):
     email: EmailStr
@@ -37,7 +36,6 @@ class OAuth2UserCreate(BaseModel):
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     native_language: Optional[str] = None
-    target_language: Optional[str] = "English"
     provider: str
     provider_user_id: str
     provider_email: Optional[str] = None
