@@ -1,5 +1,7 @@
 import importlib.util as u, re, sys, pathlib
-root = pathlib.Path("selmapp/backend/app")
+# Resolve from this file, not from the caller's cwd — a check that only
+# runs from one directory is a check that stops being run.
+root = pathlib.Path(__file__).resolve().parent / "app"
 spec=u.spec_from_file_location('lp', root/'services/language_profile.py'); m=u.module_from_spec(spec); spec.loader.exec_module(m)
 
 print("LANGUAGE PROFILES — the four blockers as data")
