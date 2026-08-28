@@ -356,6 +356,11 @@ class SpeechAssessmentRequest(BaseModel):
     prompt_text: Optional[str] = None
     target_phonemes: Optional[List[str]] = None
     assessment_type: str = Field(..., max_length=50)  # pronunciation, fluency, comprehensive
+    # From the goal's exam. This endpoint is currently unused (the live
+    # speaking path is /speech/evaluate, already dialect-aware), but the
+    # hard-coded en-US below was a latent trap, so language is a field here
+    # and routed through profile_for rather than pinned in code.
+    language: str = "en"
 
 class SpeechAssessmentResponse(BaseModel):
     overall_score: float = Field(..., ge=0.0, le=100.0)

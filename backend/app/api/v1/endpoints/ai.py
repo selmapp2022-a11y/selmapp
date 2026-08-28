@@ -150,6 +150,8 @@ class GeminiTTSRequest(BaseModel):
 
 class GrammarCheckRequest(BaseModel):
     text: str
+    # From the goal's exam. Absent -> "en" via profile_for (loud fallback).
+    language: str = "en"
 
 class GrammarAnswerAssessRequest(BaseModel):
     """Request for assessing a grammar practice answer"""
@@ -323,7 +325,7 @@ async def grammar_check(
 ) -> Any:
     """Check grammar and provide corrections"""
     try:
-        result = await ai_service.check_grammar(request.text)
+        result = await ai_service.check_grammar(request.text, language=request.language)
         if not result.get("success"):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

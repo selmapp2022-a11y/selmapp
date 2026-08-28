@@ -28,6 +28,7 @@ from app.models.user import User
 from app.services.gemini_flash_conversation_service import GeminiFlashConversationService
 from app.services.speechace_service import SpeechaceService
 from app.services.asr_service import GoogleSTTService
+from app.services.language_profile import profile_for
 from app.services.speaking_eval_service import SpeakingEvaluationService
 
 router = APIRouter()
@@ -327,13 +328,17 @@ async def assess_speech(
                     )
                 audio_bytes = await response.read()
 
-        # Transcribe audio using STT
+        # Transcribe audio using STT.
+        #
+        # This endpoint is currently unused — the live speaking path is
+        # /speech/evaluate, which already takes its dialect from the exam
+        # definition. But en-US was pinned here in code, which is exactly the
+        # "value that should have come from configuration" defect class, so it
+        # now comes from the goal's exam via profile_for. An unknown code
+        # falls back to English loudly rather than mislabelling French audio.
         stt_service = GoogleSTTService()
-        # en-US is correct here and is not the defect fixed on 2026-08-26:
-        # this is the legacy IELTS Speaking path, which is English by
-        # definition. The exam runner does not come through here — it posts to
-        # /speech/evaluate, which takes its dialect from the exam definition.
-        stt_result = await stt_service.transcribe(audio_bytes, language_code="en-US")
+        lang = profile_for(assessment_request.language)
+        stt_result = await stt_service.transcribe(audio_bytes, language_code=lang.speech_locale)
 
         if not stt_result.get("success"):
             raise HTTPException(

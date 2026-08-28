@@ -245,6 +245,7 @@ async def add_word_to_my_list(
             try:
                 from app.services.ai_service import ai_service
                 ai_result = await ai_service.generate_vocabulary_explanation(
+                    language=(payload.get("language") or "en"),
                     word=word_input, level=current_user.current_level.value
                 )
                 if ai_result.get("success"):

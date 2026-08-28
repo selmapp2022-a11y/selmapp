@@ -21,6 +21,9 @@ from app.services.prompt_library import (
 
 logger = logging.getLogger(__name__)
 
+from app.services.language_profile import profile_for
+
+
 class AIService:
     def __init__(self):
         # Configure Google Gemini.
@@ -188,13 +191,21 @@ Return ONLY valid JSON, no markdown fences, in this exact shape:
             logger.error(f"Error generating exercise content: {e}")
             return {"error": str(e), "success": False}
 
-    async def check_grammar(self, text: str) -> Dict[str, Any]:
-        """Check grammar and provide corrections"""
+    async def check_grammar(self, text: str, language: str = "en") -> Dict[str, Any]:
+        """Check grammar and provide corrections.
+
+        `language` comes from the goal's exam, not a per-user setting, and is
+        routed through profile_for so an unknown code falls back to English
+        loudly rather than silently checking French prose against English
+        rules. Until 2026-08-28 this prompt said "English text" unconditionally
+        - the fifth "value written into code that should have been config".
+        """
         if not self.gemini_model:
             raise ValueError("Gemini API not configured")
 
+        lang = profile_for(language)
         prompt = f"""
-        Check the following English text for grammar errors and provide corrections:
+        Check the following {lang.english_name} text for grammar errors and provide corrections. {lang.write_in}
         
         Text: "{text}"
         
@@ -335,15 +346,20 @@ Return ONLY valid JSON (no markdown):
             }
 
     async def generate_vocabulary_explanation(
-        self, word: str, level: str
+        self, word: str, level: str, language: str = "en"
     ) -> Dict[str, Any]:
-        """Generate vocabulary explanation with examples"""
+        """Generate vocabulary explanation with examples.
+
+        `language` comes from the goal's exam. Was hard-coded to English, so a
+        TCF candidate adding a French word got an English-framed explanation.
+        """
         if not self.gemini_model:
             raise ValueError("Gemini API not configured")
 
-        prompt = f"""Teach the English word "{word}" to an adult international
-learner. Make this feel like a tutor explaining the word in person —
-specific, accurate, and useful — not a dictionary dump.
+        lang = profile_for(language)
+        prompt = f"""Teach the {lang.english_name} word "{word}" to an adult
+international learner. {lang.write_in} Make this feel like a tutor explaining
+the word in person — specific, accurate, and useful — not a dictionary dump.
 
 {cefr_block(level)}
 
