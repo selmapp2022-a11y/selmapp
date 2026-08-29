@@ -26,6 +26,31 @@ from app.services.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 
+
+def _stored_url(stored: Any) -> Optional[str]:
+    """The URL out of an AudioStorageService result.
+
+    `store_audio` returns `{"success": True, "audio_url": ...}` on all three of
+    its paths — Spaces, local disk, and the API fallback. Five call sites read
+    `stored.get("url")`, a key it has never returned, so every one of them
+    reported `audio_url: None` while the file itself stored perfectly. Nothing
+    raised; clients that fell back to `audio_data_base64` still played audio,
+    which is why it survived.
+
+    Same family as `del accent` and the unpassed `language` (see
+    `tests/test_voice_selection_actually_selects.py`): a value produced in one
+    place and read under a different name in another. It cannot be caught by
+    the type signature and it cannot be caught by a smoke test — only by
+    asserting the value that comes out is the value that went in.
+
+    Both spellings are accepted here so a future storage backend cannot
+    reintroduce it by choosing the other one.
+    """
+    if not isinstance(stored, dict):
+        return stored
+    return stored.get("audio_url") or stored.get("url")
+
+
 # ElevenLabs default voices. Voice IDs come from https://api.elevenlabs.io/v1/voices
 # These are stable, name-stable Eleven Labs voice IDs.
 DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel — clear neutral female narration
@@ -215,7 +240,7 @@ class ElevenLabsTTSService:
 
         return {
             "success": True,
-            "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
+            "audio_url": _stored_url(stored),
             "filename": filename,
             "audio_format": "mp3",
             "tts_engine": "elevenlabs",
@@ -379,7 +404,7 @@ class ElevenLabsTTSService:
             "content_type": content_type,
             "script": script,
             "speakers": speakers_with_voice,
-            "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
+            "audio_url": _stored_url(stored),
             "audio_data": base64.b64encode(audio_bytes).decode("ascii"),
             "duration_seconds": script_result.get("duration_seconds", 60),
             "comprehension_questions": script_result.get("comprehension_questions", []),
@@ -480,7 +505,7 @@ class ElevenLabsTTSService:
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
         return {
             "success": True,
-            "audio_url": stored.get("url") if isinstance(stored, dict) else stored,
+            "audio_url": _stored_url(stored),
             "filename": filename,
             "audio_format": "mp3",
             "tts_engine": "elevenlabs",

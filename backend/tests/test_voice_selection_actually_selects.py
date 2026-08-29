@@ -224,3 +224,39 @@ def test_an_unreadable_catalogue_falls_back_and_does_not_raise():
     s._voice_catalogue = []
     got = _run(s._resolve_voice_id_async([{"language": "fr", "accent": "quebec"}]))
     assert isinstance(got, str) and got, "must still return a usable voice_id"
+
+
+# --- the eighth instance: a value read under the wrong name ---------------
+
+def test_the_stored_url_actually_comes_back():
+    """`store_audio` returns `audio_url`. Five call sites read `stored["url"]`.
+
+    Found 29 August 2026 while trying to render the variety samples the
+    listening gate needs: every ElevenLabs and OpenAI TTS call had been
+    returning `audio_url: None` since the storage service was written. The file
+    stored perfectly, nothing raised, and clients that fell back to
+    `audio_data_base64` still played audio — which is why it survived.
+
+    Same family as `del accent`: a value produced in one place and read under a
+    different name in another. Invisible to the type signature, invisible to a
+    smoke test, visible only to an assertion that what comes out is what went
+    in — which is the standing check from §4.1 applied to a return value
+    instead of an argument.
+    """
+    from app.services.elevenlabs_tts_service import _stored_url
+
+    assert _stored_url({"success": True, "audio_url": "/media/audio/tts/x.mp3"}) == "/media/audio/tts/x.mp3"
+    # A future backend that chose the other spelling must not reintroduce it.
+    assert _stored_url({"success": True, "url": "https://cdn/x.mp3"}) == "https://cdn/x.mp3"
+    assert _stored_url({"success": False, "error": "nope"}) is None
+    assert _stored_url("already-a-string") == "already-a-string"
+
+
+def test_openai_and_elevenlabs_read_the_same_key():
+    """Both services persist through the same storage service, so a fix in one
+    that is not in the other is a bug waiting for a provider switch."""
+    from app.services.elevenlabs_tts_service import _stored_url as eleven
+    from app.services.openai_tts_service import _stored_url as openai
+
+    payload = {"success": True, "audio_url": "/media/audio/tts/y.mp3"}
+    assert eleven(payload) == openai(payload) == "/media/audio/tts/y.mp3"
