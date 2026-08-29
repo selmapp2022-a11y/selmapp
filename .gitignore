@@ -18,3 +18,5 @@ __pycache__/
   logs/
   .DS_Store
   
+# Scratch: the device mount cannot unlink, so removals are moved here.
+_to_delete/

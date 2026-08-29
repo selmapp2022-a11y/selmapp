@@ -210,8 +210,11 @@ async def main(args) -> int:
                 skipped.append((rec_id, variety, "dialogue render returned no audio"))
                 continue
             voice_id, name = pool[0][1], " + ".join(names)
+            voice_ids = [pool[0][1], pool[1][1]]
+            model_used = MODEL
         else:
             name, voice_id = pool[0]
+            voice_ids = None
             result = await service.generate_audio_content(
                 script,
                 speaker_config=[{"voice_id": voice_id}],
@@ -221,6 +224,7 @@ async def main(args) -> int:
                 skipped.append((rec_id, variety, str(result.get("error"))[:120]))
                 continue
             audio = base64.b64decode(result.get("audio_data_base64") or "")
+            model_used = result.get("tts_model") or MODEL
 
         path = os.path.join(args.out, f"{rec_id}.mp3")
         with open(path, "wb") as fh:
@@ -236,9 +240,13 @@ async def main(args) -> int:
             # later from a filename or a cast file that may since have changed.
             "voice": {
                 "voiceId": voice_id,
+                # Both ids, in turn order, for a dialogue. Recorded here
+                # because naming two speakers while recording one id is a
+                # provenance record that is half wrong and looks whole.
+                **({"voiceIds": voice_ids} if voice_ids else {}),
                 "vendorName": name,
                 "requestedVariety": variety,
-                "modelId": result.get("tts_model") or MODEL,
+                "modelId": model_used,
                 "renderedAt": datetime.date.today().isoformat(),
             },
             "rendered": True,
