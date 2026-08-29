@@ -321,19 +321,17 @@ def _validate(out: Dict[str, Any], p: PlanPayload) -> List[str]:
 
 
 def _call_model(p: PlanPayload) -> Dict[str, Any]:
-    """gemini-2.5-pro, temperature 0, fixed seed, structured JSON. If any of
-    the three is unavailable the caller falls back to the template and the
+    """gemini-2.5-pro, temperature 0, structured JSON. If the model or its
+    settings are unavailable the caller falls back to the template and the
     response records it."""
-    # google-genai (the current SDK), NOT the legacy google-generativeai 0.8.x,
-    # which raises "Unknown field for GenerationConfig: seed" and so cannot meet
-    # SELM-PLANNER-SPEC §1's requirement of temperature 0 AND a fixed seed AND
-    # structured JSON together. Verified in the api container: the legacy SDK
-    # rejects seed; this one accepts it.
-    from google import genai
-    from google.genai import types
+    # google-generativeai 0.8.3: temperature 0 + structured JSON. This SDK
+    # rejects the `seed` parameter, so determinism rests on temperature 0 alone;
+    # google-genai (which accepts seed) pulls in google-auth/httpx/pydantic
+    # versions that conflict with the app's pinned stack, so it is not used here.
+    import google.generativeai as genai
     from app.core.config import settings
 
-    client = genai.Client(api_key=settings.GOOGLE_GEMINI_API_KEY)
+    genai.configure(api_key=settings.GOOGLE_GEMINI_API_KEY)
     payload = p.model_dump()
     payload.pop("criteria", None)  # the criteria list is for validation, not the model
     # Rule 2 forbids the model stating a date, and the sitting date is the one
@@ -341,13 +339,14 @@ def _call_model(p: PlanPayload) -> Dict[str, Any]:
     # to explain the ordering or the gaps, so it is withheld from the model.
     if isinstance(payload.get("attestation"), dict):
         payload["attestation"].pop("sat_on", None)
-    resp = client.models.generate_content(
-        model="gemini-2.5-pro",
-        contents=json.dumps(payload, ensure_ascii=False),
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+    model = genai.GenerativeModel(
+        "gemini-2.5-pro",
+        system_instruction=SYSTEM_PROMPT,
+    )
+    resp = model.generate_content(
+        json.dumps(payload, ensure_ascii=False),
+        generation_config=genai.types.GenerationConfig(
             temperature=0,
-            seed=7,
             response_mime_type="application/json",
             response_schema=RESPONSE_SCHEMA,
         ),
