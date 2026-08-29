@@ -13,6 +13,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -43,6 +44,27 @@ DEFAULT_MODEL_ID = "eleven_turbo_v2_5"   # fast multi-lingual model
 TTS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 TIMEOUT_SECONDS = 30.0
 
+# --- The account's own voice catalogue ---------------------------------------
+#
+# NAME_TO_VOICE_ID above is a hand-written list of seven premade voices. It was
+# enough while every recording was a generic English narration and wrong the
+# moment the exams needed accents: a TCF listening recording asking for a
+# Quebecois speaker silently got Rachel, a North American female, and nothing
+# in the response said so. A wrong accent is not a cosmetic defect in a
+# listening exam — it is a different test.
+#
+# So the catalogue is read from the account instead of written down here. Any
+# voice the account holds can be addressed by its display name, or by what it
+# IS: language + accent + gender. Adding a voice in the ElevenLabs library is
+# then the whole of "give the exam a Quebecois speaker" — no deploy, no edit.
+#
+# Failure is always silent and downward: an unreadable catalogue returns [] and
+# selection falls back to the hard-coded pools. A catalogue that raises into a
+# render would turn a cosmetic problem into a missing recording.
+ACCOUNT_VOICES_URL = "https://api.elevenlabs.io/v2/voices"
+CATALOGUE_TTL_SECONDS = 3600.0
+CATALOGUE_PAGE_SIZE = 100
+
 
 class ElevenLabsTTSService:
     """Text-to-Speech via ElevenLabs HTTP API."""
@@ -55,6 +77,9 @@ class ElevenLabsTTSService:
                 "until the key is configured."
             )
         self.redis = None
+        # (voices, fetched_at) — see ACCOUNT_VOICES_URL above.
+        self._voice_catalogue: Optional[List[Dict[str, Any]]] = None
+        self._voice_catalogue_at: float = 0.0
 
     async def _get_redis(self):
         if not self.redis:
@@ -82,8 +107,10 @@ class ElevenLabsTTSService:
                 "fallback_available": True,
             }
 
-        # Voice selection — accept either a voice_id directly or a friendly name.
-        voice_id = self._resolve_voice_id(speaker_config)
+        # Voice selection, in order of how specific the caller was:
+        #   an explicit voice_id, a name on the account, what the voice must BE
+        #   (language/accent/gender), and only then the hard-coded fallback.
+        voice_id = await self._resolve_voice_id_async(speaker_config)
         model_id = (voice_settings or {}).get("model_id") or DEFAULT_MODEL_ID
 
         # Sensible defaults; overridable per request.
@@ -233,8 +260,13 @@ class ElevenLabsTTSService:
         script: str = script_result["script"] or ""
         speakers_meta: List[Dict[str, Any]] = script_result.get("speakers", []) or []
 
-        # Map each unique speaker name to a stable, gender-appropriate voice.
-        voice_map = self._build_speaker_voice_map(speakers_meta, script)
+        # Map each unique speaker name to a stable, gender-appropriate voice
+        # IN THE LANGUAGE THAT WAS ASKED FOR. `language` reached the script
+        # generator and stopped there, so a French script was read aloud by
+        # English voices — audible in the first syllable.
+        voice_map = await self._build_speaker_voice_map_async(
+            speakers_meta, script, language=language
+        )
 
         # Parse the script into (speaker, text) turns. Lines like
         # "Speaker Name: text" mark a turn; lines without a colon are
@@ -387,7 +419,8 @@ class ElevenLabsTTSService:
         :meth:`generate_audio_content` so the caller in
         ``gemini_tts_service`` can swap providers transparently.
         """
-        del audio_type, accent, voice_settings  # accepted for API parity
+        del audio_type, voice_settings  # accepted for API parity
+        # `accent` is no longer discarded — see _build_speaker_voice_map_async.
         if not self.api_key:
             return {"success": False, "error": "ELEVENLABS_API_KEY not configured"}
         if not turns:
@@ -406,7 +439,9 @@ class ElevenLabsTTSService:
             if name not in seen:
                 seen[name] = {"name": name, "gender": t.get("gender") or ""}
         speakers_meta = list(seen.values())
-        voice_map = self._build_speaker_voice_map(speakers_meta, "")
+        voice_map = await self._build_speaker_voice_map_async(
+            speakers_meta, "", accent=accent
+        )
 
         audio_bytes = await self._render_dialogue_via_legacy(turns, voice_map)
         if not audio_bytes:
@@ -499,10 +534,58 @@ class ElevenLabsTTSService:
                 chunks.append(resp.content)
         return b"".join(chunks)
 
+    async def _build_speaker_voice_map_async(
+        self,
+        speakers_meta: List[Dict[str, Any]],
+        script: str,
+        *,
+        language: Optional[str] = None,
+        accent: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """The speaker map, drawn from the account when an accent is asked for.
+
+        `accent` used to be accepted and thrown away — `generate_multi_speaker_audio`
+        literally read `del accent`. A caller could ask for a Quebecois
+        conversation and receive two North American voices, and nothing in the
+        result said otherwise.
+
+        Each gender is filled independently: an account with a Quebecois male
+        and no Quebecois female gets the right male voice and falls back for
+        the female, rather than discarding both. When a pool comes up empty
+        that is logged, because it is the moment the recording stops being in
+        the accent it claims.
+        """
+        if not (language or accent):
+            return self._build_speaker_voice_map(speakers_meta, script)
+
+        lang = str(language)[:2] if language else None
+        female = [
+            v["voice_id"]
+            for v in await self.find_voices(language=lang, accent=accent, gender="female")
+            if v.get("voice_id")
+        ]
+        male = [
+            v["voice_id"]
+            for v in await self.find_voices(language=lang, accent=accent, gender="male")
+            if v.get("voice_id")
+        ]
+        for label, pool in (("female", female), ("male", male)):
+            if not pool:
+                logger.warning(
+                    "no %s voice on the account for language=%s accent=%s; "
+                    "those speakers will be rendered in a DIFFERENT accent",
+                    label,
+                    language,
+                    accent,
+                )
+        return self._build_speaker_voice_map(speakers_meta, script, female, male)
+
     def _build_speaker_voice_map(
         self,
         speakers_meta: List[Dict[str, Any]],
         script: str,
+        female_pool: Optional[List[str]] = None,
+        male_pool: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """Assign a distinct ElevenLabs voice_id to each speaker name.
 
@@ -510,12 +593,16 @@ class ElevenLabsTTSService:
         round-robin over female/male voice pools so two speakers always sound
         different even when gender is unknown.
         """
-        female_voices = [
+        # The pools are arguments now. Passing none keeps the old behaviour —
+        # seven premade North American English voices — which is right for a
+        # generic English exercise and wrong for any exam that names an accent.
+        # `_build_speaker_voice_map_async` fills them from the account.
+        female_voices = list(female_pool or []) or [
             "21m00Tcm4TlvDq8ikWAM",  # Rachel
             "EXAVITQu4vr4xnSDxMaL",  # Bella
             "MF3mGyEYCl7XYWbV9V6O",  # Elli
         ]
-        male_voices = [
+        male_voices = list(male_pool or []) or [
             "pNInz6obpgDQGcFmaJgB",  # Adam
             "ErXwobaYiN019PkySvjV",  # Antoni
             "TxGEqnHWrfWFTfGW9XjX",  # Josh
@@ -567,7 +654,204 @@ class ElevenLabsTTSService:
                     m_i += 1
         return out
 
+    # ---- The account's voice catalogue ----
+
+    async def load_voice_catalogue(self, force: bool = False) -> List[Dict[str, Any]]:
+        """Every voice on the account, as ElevenLabs reports it.
+
+        Cached in the process for an hour. Returns [] rather than raising when
+        the key is missing, the call fails, or the permission is absent: a
+        catalogue that cannot be read must degrade to the hard-coded pools.
+        """
+        now = time.monotonic()
+        if (
+            not force
+            and self._voice_catalogue is not None
+            and (now - self._voice_catalogue_at) < CATALOGUE_TTL_SECONDS
+        ):
+            return self._voice_catalogue
+
+        if not self.api_key:
+            return []
+
+        voices: List[Dict[str, Any]] = []
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+                page_token: Optional[str] = None
+                for _ in range(10):  # bounded: 1000 voices is far past any real account
+                    params: Dict[str, Any] = {"page_size": CATALOGUE_PAGE_SIZE}
+                    if page_token:
+                        params["next_page_token"] = page_token
+                    resp = await client.get(
+                        ACCOUNT_VOICES_URL,
+                        headers={"xi-api-key": self.api_key},
+                        params=params,
+                    )
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "voice catalogue unavailable (%s): %s",
+                            resp.status_code,
+                            resp.text[:200],
+                        )
+                        break
+                    body = resp.json()
+                    voices.extend(body.get("voices") or [])
+                    if not body.get("has_more"):
+                        break
+                    page_token = body.get("next_page_token")
+                    if not page_token:
+                        break
+        except Exception as exc:  # noqa: BLE001 - never raise into a render
+            logger.warning("voice catalogue fetch failed: %s", exc)
+            return self._voice_catalogue or []
+
+        if voices:
+            self._voice_catalogue = voices
+            self._voice_catalogue_at = now
+        return voices
+
+    @staticmethod
+    def _voice_traits(voice: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Every (language, accent, gender) a voice claims.
+
+        A voice carries its own labels, and — when it came from the shared
+        library — a `verified_languages` list that is the only place the accent
+        per language is recorded. Both are read, because a French voice
+        verified as Quebecois often carries `labels.accent` from its English
+        entry and would otherwise be matched as the wrong thing.
+        """
+        labels = voice.get("labels") or {}
+        gender = str(labels.get("gender") or "").lower()
+        traits: List[Dict[str, str]] = []
+        for ver in voice.get("verified_languages") or []:
+            traits.append(
+                {
+                    "language": str(ver.get("language") or "").lower(),
+                    "accent": str(ver.get("accent") or "").lower(),
+                    "gender": str(ver.get("gender") or gender or "").lower(),
+                }
+            )
+        traits.append(
+            {
+                "language": str(labels.get("language") or "").lower(),
+                "accent": str(labels.get("accent") or "").lower(),
+                "gender": gender,
+            }
+        )
+        return traits
+
+    async def find_voices(
+        self,
+        *,
+        language: Optional[str] = None,
+        accent: Optional[str] = None,
+        gender: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Account voices matching what is asked for. Unset criteria are ignored."""
+        want_lang = (language or "").lower() or None
+        want_accent = (accent or "").lower() or None
+        want_gender = (gender or "").lower() or None
+
+        out: List[Dict[str, Any]] = []
+        for voice in await self.load_voice_catalogue():
+            for t in self._voice_traits(voice):
+                if want_lang and not t["language"].startswith(want_lang):
+                    continue
+                if want_accent and want_accent not in t["accent"]:
+                    continue
+                if want_gender and not t["gender"].startswith(want_gender[0]):
+                    continue
+                out.append(voice)
+                break
+        return out
+
+    async def pick_voice(
+        self,
+        *,
+        language: Optional[str] = None,
+        accent: Optional[str] = None,
+        gender: Optional[str] = None,
+        exclude: Optional[Any] = None,
+    ) -> Optional[str]:
+        """One voice_id for what is asked for, or None.
+
+        None is the honest answer when the account holds nothing of that
+        accent, and the caller decides what to do with it. Returning a voice
+        of the wrong accent here is how a listening bank ends up in the wrong
+        variety without anyone noticing.
+        """
+        taken = set(exclude or ())
+        matches = await self.find_voices(language=language, accent=accent, gender=gender)
+        for voice in matches:
+            vid = voice.get("voice_id")
+            if vid and vid not in taken:
+                return vid
+        return matches[0].get("voice_id") if matches else None
+
+    async def voice_id_for_name(self, name: str) -> Optional[str]:
+        """A voice_id by display name, case-insensitively, prefix-tolerant.
+
+        Display names in the library carry a description after the name
+        ("Alexandre - Authentic French Canadian"), so an exact match would fail
+        for every voice a person would actually name.
+        """
+        want = (name or "").strip().lower()
+        if not want:
+            return None
+        catalogue = await self.load_voice_catalogue()
+        for voice in catalogue:
+            if str(voice.get("name") or "").strip().lower() == want:
+                return voice.get("voice_id")
+        for voice in catalogue:
+            if str(voice.get("name") or "").strip().lower().startswith(want):
+                return voice.get("voice_id")
+        return None
+
     # ---- Helpers ----
+
+    async def _resolve_voice_id_async(
+        self, speaker_config: Optional[List[Dict[str, Any]]]
+    ) -> str:
+        """_resolve_voice_id, plus the two things only the account can answer.
+
+        A caller may now say `{"voice_name": "Alexandre - Authentic French
+        Canadian"}` or `{"language": "fr", "accent": "quebec", "gender":
+        "male"}` and get that voice. If the account holds nothing matching, the
+        request falls through to the old behaviour rather than failing — but
+        the miss is logged, because a silently substituted accent is exactly
+        the defect this exists to prevent.
+        """
+        if speaker_config:
+            first = speaker_config[0]
+            if first.get("voice_id"):
+                return str(first["voice_id"])
+
+            name = first.get("voice_name") or first.get("name")
+            if name:
+                found = await self.voice_id_for_name(str(name))
+                if found:
+                    return found
+
+            language = first.get("language") or first.get("locale")
+            accent = first.get("accent") or first.get("variety")
+            gender = first.get("gender")
+            if language or accent:
+                found = await self.pick_voice(
+                    language=str(language)[:2] if language else None,
+                    accent=str(accent) if accent else None,
+                    gender=str(gender) if gender else None,
+                )
+                if found:
+                    return found
+                logger.warning(
+                    "no account voice for language=%s accent=%s gender=%s; "
+                    "falling back to a default voice of a DIFFERENT accent",
+                    language,
+                    accent,
+                    gender,
+                )
+
+        return self._resolve_voice_id(speaker_config)
 
     def _resolve_voice_id(
         self, speaker_config: Optional[List[Dict[str, Any]]]
