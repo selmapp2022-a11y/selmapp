@@ -2,7 +2,8 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     auth, users, content, exercises, progress, ai, reading, writing,
     listening, speaking, personalization, vocabulary, payments, admin,
-    ai_reading, personal_trainer, mobile, speech, lessons, practice_content, plan
+    ai_reading, personal_trainer, mobile, speech, lessons, practice_content, plan,
+    attestation
 )
 
 api_router = APIRouter()
@@ -18,6 +19,7 @@ api_router.include_router(progress.router, prefix="/progress", tags=["progress"]
 api_router.include_router(ai.router, prefix="/ai", tags=["ai-services"])
 api_router.include_router(ai_reading.router, prefix="/ai/reading", tags=["ai-reading-generation"])
 api_router.include_router(plan.router, prefix="/plan", tags=["study-plan"])
+api_router.include_router(attestation.router, prefix="/attestation", tags=["attestation"])
 api_router.include_router(reading.router, prefix="/reading", tags=["reading"])
 api_router.include_router(writing.router, prefix="/writing", tags=["writing"])
 api_router.include_router(listening.router, prefix="/listening", tags=["listening"])
