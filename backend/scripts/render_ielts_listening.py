@@ -30,7 +30,7 @@ import argparse, asyncio, base64, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.elevenlabs_tts_service import elevenlabs_tts_service as service  # noqa: E402
+from app.services.elevenlabs_tts_service import ElevenLabsTTSService  # noqa: E402
 
 MODEL = "eleven_flash_v2_5"
 PLAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ielts-listening-plan.json")
@@ -90,6 +90,7 @@ async def main():
               "can check it, which is why it is deliberate rather than a default.")
         return 2
 
+    service = ElevenLabsTTSService()
     rows = json.load(open(PLAN, encoding="utf-8"))
     os.makedirs(args.out, exist_ok=True)
 
@@ -105,7 +106,15 @@ async def main():
         first, second = CAST.get(row["variety"], (None, None))
         ids = {}
         names = {}
-        for tag, name in (("A", first), ("B", second)):
+        # A monologue has no second speaker. Resolving one anyway put a voice
+        # into the provenance that never opened its mouth — Part 2's manifest
+        # named Jofra, and Part 4 named Darren twice, for recordings in which
+        # exactly one person speaks. A provenance record that lists a voice
+        # that did not speak is the same defect as one that omits a voice that
+        # did, and it was caught by reading the manifest rather than by any
+        # check.
+        wanted = (("A", first),) if row["speakers"] < 2 else (("A", first), ("B", second))
+        for tag, name in wanted:
             if name is None:
                 continue
             vid = await service.voice_id_for_name(name)
