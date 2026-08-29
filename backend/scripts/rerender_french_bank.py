@@ -1,8 +1,14 @@
 #!/usr/bin/env python
 """Re-render the 39 TCF listening recordings, one declared variety each.
 
-    python scripts/rerender_french_bank.py --plan PLAN.json --dry-run
-    python scripts/rerender_french_bank.py --plan PLAN.json --gate-passed
+    python scripts/rerender_french_bank.py --dry-run
+    python scripts/rerender_french_bank.py --gate-passed
+
+The plan ships with the code — `scripts/tcf-variety-plan.json`, generated from
+`tcf-variety-plan.ts` and checked against it by `comprehension.check.ts`. It is
+committed rather than carried here by hand because a hand-carried plan will one
+day be a stale one, and nothing would notice: it would still parse, and 39
+perfectly good files would render in the wrong varieties.
 
 `--gate-passed` is required to write any audio, and it is not a formality.
 `SELM-RULINGS-voices.md` §4.2:
@@ -181,8 +187,11 @@ async def main(args) -> int:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--plan", required=True,
-                    help="JSON list of {id, level, speakers, variety, script}")
+    ap.add_argument("--plan",
+                    default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         "tcf-variety-plan.json"),
+                    help="JSON list of {id, level, speakers, variety, script}; "
+                         "defaults to the committed plan beside this script")
     ap.add_argument("--out", default="rerender-out")
     ap.add_argument("--gate-passed", action="store_true",
                     help="you have listened to every sample from render_variety_gate.py")
