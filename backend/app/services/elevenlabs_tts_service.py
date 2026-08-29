@@ -763,6 +763,23 @@ class ElevenLabsTTSService:
                     continue
                 out.append(voice)
                 break
+
+        # A voice whose OWN language is the one asked for comes first.
+        #
+        # The vendor verifies accents per language, and the results are better
+        # than they look: "Silias North", a Canadian ENGLISH narrator, carries
+        # `verified_languages: [{language: fr, accent: fr-quebec}]` — it really
+        # does sound Quebecois in French. So cross-language voices belong in
+        # the result. They do not belong at the front of it: a native French
+        # voice chosen for the cast should outrank an English voice that also
+        # speaks French, and without this the order is just catalogue order,
+        # which is to say accidental.
+        if want_lang:
+            out.sort(
+                key=lambda v: not str((v.get("labels") or {}).get("language") or "")
+                .lower()
+                .startswith(want_lang)
+            )
         return out
 
     async def pick_voice(
