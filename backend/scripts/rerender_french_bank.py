@@ -60,17 +60,72 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Which cast role speaks each variety, and the fallback order within it.
 # Names must match the account exactly; they mirror TCF_VOICE_CAST.
+# The cast, HEARD AND CONFIRMED by the founder on 29 August 2026.
+#
+# Not a shortlist and not a guess. Every voice below was rendered on the same
+# model this script uses, played back, and approved one at a time. Three
+# candidates were rejected in that session and are named here rather than
+# quietly dropped, because "we tried it and it was wrong" is the only part of
+# this that cannot be re-derived from the vendor's labels:
+#
+#   Julia - Warm French Narrator      (international, female) - rejected
+#   Peter - Clear, Engaging...        (swiss, male)           - rejected
+#   Alimata - Professional...         (west african, female)  - rejected
+#
+# The vendor's own description had recommended all three. That is the whole
+# argument for the listening gate: a label is a claim by whoever uploaded the
+# voice, and three of eight claims did not survive contact with an ear.
+#
+# ORDER MATTERS. pool[0] is the voice a monologue gets; pool[0] and pool[1]
+# are the two speakers of a dialogue, so the pair is female-then-male
+# deliberately - two speakers of the same gender in a two-person conversation
+# is a listening test of the wrong thing.
 CAST = {
-    "international": ["Julia - Warm French Narrator", "Antoine - Audiobook Narrator",
-                      "Clémence - Advertising", "David - Professional Narrator"],
+    "international": ["Clémence - Advertising", "Antoine - Audiobook Narrator"],
     "quebecois": ["Amélie - Young, Confident and Friendly", "Alexandre - Authentic French Canadian"],
-    "west_african": ["Alimata - Professional and Welcoming", "Keli - Calm & Natural African"],
-    "belgian": ["Christophe Géradon - Soft and Narrative", "Adrien Piret - Young and Friendly"],
-    "swiss": ["Nathalie - Tender and Optimistic", "Peter - Clear, Engaging and Professional"],
+    "west_african": ["Fatou - Radiant and Gentle", "Keli - Calm & Natural African"],
+    # One voice, and that is a fact about the account, not a decision: the
+    # library holds seven Belgian French voices and every one is male. The
+    # plan keeps Belgian off dialogues for exactly this reason.
+    "belgian": ["Christophe Géradon - Soft and Narrative"],
+    "swiss": ["Nathalie - Tender and Optimistic", "Romain - Joyful, Optimistic and engaging"],
+    # Cast, not scheduled - see ACADIAN_NOTE in french-voices.ts. Unheard,
+    # because nothing schedules it; hear it before that ever changes.
     "acadian": ["Evangeline - Warm Acadian Conversational", "Seddik - French"],
 }
 
 MODEL = "eleven_flash_v2_5"
+
+
+def _turns(script: str):
+    """Split a TCF dialogue into alternating turns.
+
+    The bank marks turns with an em dash at the start of a line —
+
+        — Bonjour, je cherche un appartement pour deux personnes.
+        — Nous en avons un au troisième étage.
+
+    — and names nobody, because the TCF does not name its speakers. So the
+    turns alternate A/B by position. Lines without a dash continue the current
+    turn, which is how a wrapped paragraph stays one utterance instead of
+    becoming a second speaker.
+
+    Returns [] when the script has no dashes, so the caller falls back to the
+    single-voice path rather than inventing a dialogue.
+    """
+    lines = [ln.strip() for ln in (script or "").splitlines() if ln.strip()]
+    if not any(ln.startswith(("—", "–", "-")) for ln in lines):
+        return []
+    out, idx = [], 0
+    for ln in lines:
+        if ln.startswith(("—", "–", "-")):
+            text = ln.lstrip("—–- ").strip()
+            out.append({"speaker": "A" if idx % 2 == 0 else "B", "text": text})
+            idx += 1
+        elif out:
+            out[-1]["text"] += " " + ln
+    return [t for t in out if t["text"]]
+
 
 
 async def main(args) -> int:
@@ -134,35 +189,53 @@ async def main(args) -> int:
             skipped.append((rec_id, variety, "no script in the plan file"))
             continue
 
-        name, voice_id = pool[0]
+        turns = _turns(script) if speakers > 1 else []
         chars += len(script)
+
         if args.dry_run:
-            manifest.append({"id": rec_id, "variety": variety, "voice": name,
-                             "voiceId": voice_id, "chars": len(script), "rendered": False})
+            manifest.append({"id": rec_id, "variety": variety,
+                             "voices": [n for n, _ in pool[:max(1, len(turns) and 2)]],
+                             "turns": len(turns), "chars": len(script), "rendered": False})
             continue
 
-        result = await service.generate_audio_content(
-            script,
-            speaker_config=[{"voice_id": voice_id}],
-            voice_settings={"model_id": MODEL},
-        )
-        if not result.get("success"):
-            skipped.append((rec_id, variety, str(result.get("error"))[:120]))
-            continue
+        if turns:
+            # A dialogue rendered with one voice is "one voice reading both
+            # speakers" — the defect this codebase already shipped once, in
+            # May, and that iPhone testers reported for months. Two voices of
+            # the SAME variety, alternating by turn.
+            voice_map = {"A": pool[0][1], "B": pool[1][1]}
+            names = [pool[0][0], pool[1][0]]
+            audio = await service._render_dialogue_via_legacy(turns, voice_map)
+            if not audio:
+                skipped.append((rec_id, variety, "dialogue render returned no audio"))
+                continue
+            voice_id, name = pool[0][1], " + ".join(names)
+        else:
+            name, voice_id = pool[0]
+            result = await service.generate_audio_content(
+                script,
+                speaker_config=[{"voice_id": voice_id}],
+                voice_settings={"model_id": MODEL},
+            )
+            if not result.get("success"):
+                skipped.append((rec_id, variety, str(result.get("error"))[:120]))
+                continue
+            audio = base64.b64decode(result.get("audio_data_base64") or "")
 
         path = os.path.join(args.out, f"{rec_id}.mp3")
         with open(path, "wb") as fh:
-            fh.write(base64.b64decode(result.get("audio_data_base64") or ""))
+            fh.write(audio)
 
         manifest.append({
             "id": rec_id,
             "variety": variety,
+            "speakers": speakers,
             "audioPath": f"tcf-co/{rec_id}.mp3",
             # This block is what goes into Recording.voice. Written here, at
             # render time, by the thing that did the rendering — never inferred
             # later from a filename or a cast file that may since have changed.
             "voice": {
-                "voiceId": result.get("voice_id") or voice_id,
+                "voiceId": voice_id,
                 "vendorName": name,
                 "requestedVariety": variety,
                 "modelId": result.get("tts_model") or MODEL,
