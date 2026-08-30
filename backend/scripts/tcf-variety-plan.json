@@ -3,7 +3,7 @@
   "id": "tcf-co-01-r",
   "level": "A1",
   "speakers": 1,
-  "variety": "belgian",
+  "variety": "quebecois",
   "script": "Bonjour, je voudrais un café, s'il vous plaît."
  },
  {
@@ -24,7 +24,7 @@
   "id": "tcf-co-04-r",
   "level": "A1",
   "speakers": 1,
-  "variety": "west_african",
+  "variety": "swiss",
   "script": "Il pleut beaucoup aujourd'hui, prends ton parapluie."
  },
  {
@@ -45,14 +45,14 @@
   "id": "tcf-co-07-r",
   "level": "A2",
   "speakers": 1,
-  "variety": "belgian",
+  "variety": "swiss",
   "script": "Pour vous inscrire au cours, remplissez d'abord le formulaire en ligne, puis apportez une pièce d'identité au bureau, le jeudi."
  },
  {
   "id": "tcf-co-08-r",
   "level": "A2",
   "speakers": 2,
-  "variety": "west_african",
+  "variety": "quebecois",
   "script": "— Le rendez-vous chez le dentiste est à quelle heure ?\n— À neuf heures quinze, mais il faut arriver dix minutes avant."
  },
  {
@@ -108,7 +108,7 @@
   "id": "tcf-co-16-r",
   "level": "B1",
   "speakers": 2,
-  "variety": "west_african",
+  "variety": "international",
   "script": "— Le colis devait arriver hier.\n— Je vois qu'il est passé par notre centre de tri ce matin. Il sera livré demain avant midi. Si personne n'est présent, il sera déposé au bureau de poste du quartier."
  },
  {
@@ -171,7 +171,7 @@
   "id": "tcf-co-25-r",
   "level": "B2",
   "speakers": 2,
-  "variety": "west_african",
+  "variety": "quebecois",
   "script": "— Alors, ce cours du soir ?\n— Le contenu est excellent, vraiment. Mais franchement, trois heures de cours après une journée de travail, j'ai fini par remarquer que je ne retiens à peu près que la première heure. Je vais peut-être passer au format du samedi matin."
  },
  {
@@ -185,7 +185,7 @@
   "id": "tcf-co-27-r",
   "level": "B2",
   "speakers": 1,
-  "variety": "belgian",
+  "variety": "international",
   "script": "J'ai relu ton rapport hier soir. C'est solide, les données tiennent, et la méthode est claire. Je te dirai simplement une chose : ta recommandation arrive à la page onze. Personne, au comité, ne lira jusque-là."
  },
  {
@@ -227,7 +227,7 @@
   "id": "tcf-co-33-r",
   "level": "C1",
   "speakers": 2,
-  "variety": "west_african",
+  "variety": "quebecois",
   "script": "— Vous avez passé dix ans dans ce service. Vous partez sans regret ?\n— Sans regret, ce serait beaucoup dire. Disons que j'ai fini par comprendre que ce qui me retenait n'était plus le travail, mais les gens. Et cela, on peut le garder en partant."
  },
  {
@@ -269,7 +269,7 @@
   "id": "tcf-co-39-r",
   "level": "C2",
   "speakers": 1,
-  "variety": "west_african",
+  "variety": "quebecois",
   "script": "On célèbre le retour de l'usine comme on célébrerait un fils prodigue. Trois cents emplois, annonce le communiqué ; deux cents, précise la note en bas de page, pour la première année. J'ajoute, sans malice, que la même municipalité expliquait il y a huit ans que l'avenir de la région ne passait plus par l'industrie. Je ne lui reproche pas d'avoir changé d'avis. Je lui reproche de n'avoir jamais changé de ton."
  }
 ]

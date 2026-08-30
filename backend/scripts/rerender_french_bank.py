@@ -83,15 +83,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CAST = {
     "international": ["Clémence - Advertising", "Antoine - Audiobook Narrator"],
     "quebecois": ["Amélie - Young, Confident and Friendly", "Alexandre - Authentic French Canadian"],
-    "west_african": ["Fatou - Radiant and Gentle", "Keli - Calm & Natural African"],
-    # One voice, and that is a fact about the account, not a decision: the
-    # library holds seven Belgian French voices and every one is male. The
-    # plan keeps Belgian off dialogues for exactly this reason.
-    "belgian": ["Christophe Géradon - Soft and Narrative"],
+    # west_african, belgian and acadian were HERE and are out as of
+    # 31 August 2026: the founder narrowed French to Québécois, Parisian and
+    # Swiss. Removing the entries rather than leaving them unreferenced is
+    # deliberate — this dict is what actually spends the credits, and a plan
+    # can be edited. If a row ever names a variety with no entry here the
+    # batch skips it and says so, which is the failure that is visible.
+    #
+    #   west_african  Fatou - Radiant and Gentle / Keli - Calm & Natural African
+    #   belgian       Christophe Géradon - Soft and Narrative
+    #   acadian       Evangeline - Warm Acadian Conversational / Seddik - French
     "swiss": ["Nathalie - Tender and Optimistic", "Romain - Joyful, Optimistic and engaging"],
-    # Cast, not scheduled - see ACADIAN_NOTE in french-voices.ts. Unheard,
-    # because nothing schedules it; hear it before that ever changes.
-    "acadian": ["Evangeline - Warm Acadian Conversational", "Seddik - French"],
 }
 
 MODEL = "eleven_flash_v2_5"

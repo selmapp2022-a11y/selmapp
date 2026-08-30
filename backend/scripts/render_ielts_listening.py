@@ -40,12 +40,33 @@ PLAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ielts-listening
 # that goes stale returns `voice_not_found` at render time, while a name that
 # resolves to nothing fails loudly and immediately.
 NARRATOR = "James"
+
+# ORDER MATTERS, and it is the same convention the French batch uses: entry 0
+# is the voice a monologue gets, entries 0 and 1 are the two speakers of a
+# dialogue. `None` in the second slot means the account holds ONE voice of
+# this variety — and a dialogue planned onto it is skipped rather than
+# rendered with a speaker of another accent.
+#
+# Irish is male-only on this account and Scottish is female-only. That is not
+# worked around: `ielts-variety-plan.ts` keeps both off two-speaker parts, and
+# `ielts-variety.check.ts` fails if that ever stops being true. This dict is
+# the second line of the same defence, because a plan can be edited and this
+# script is what actually spends the credits.
 CAST = {
-    # variety: (first speaker, second speaker)
-    "australian": ("Emily", "Neil"),
-    "british": ("Juliet", "Jofra"),
-    "canadian": ("Rebecca", "Dave"),
-    "irish": ("Darren", "Darren"),
+    # variety: (first speaker, second speaker or None)
+    "canadian":       ("Rebecca", "Dave"),
+    "british":        ("Juliet", "Jofra"),
+    "australian":     ("Emily", "Neil"),
+    "north_american": ("Heather", "Russ"),
+    "new_zealand":    ("Ella", "Luke"),
+    # Irish and Scottish are OUT of the bank as of 31 August 2026 — the
+    # founder narrowed IELTS to Canadian plus the four accents ielts.org
+    # names. They are left here, unreferenced by any plan row, because each is
+    # a single voice on this account and the RULE that fact demands outlives
+    # them: a dialogue needs two voices of one variety, and where the account
+    # holds one the renderer would substitute silently.
+    "irish":          ("Darren", None),
+    "scottish":       ("Claire", None),
 }
 
 
@@ -81,6 +102,11 @@ async def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--cast-heard", action="store_true",
                     help="You have listened to the cast. Required before any audio is written.")
+    ap.add_argument("--only", default="", help="Comma-separated ids. Renders only these.")
+    ap.add_argument("--redo-rendered", action="store_true",
+                    help="Also render rows the plan marks as already rendered. Off by default: "
+                         "the four anchors were heard on 29 August and re-spending on them "
+                         "silently is how a batch costs twice what it reports.")
     args = ap.parse_args()
 
     if not args.dry_run and not args.cast_heard:
@@ -99,11 +125,65 @@ async def main():
         print(f"NARRATOR NOT FOUND on the account: {NARRATOR!r}. Nothing rendered.")
         return 1
 
+    # RESOLVE THE WHOLE CAST BEFORE SPENDING ANYTHING.
+    #
+    # The founder, 31 August: *"if something comes back at render time that
+    # does not match what is claimed — voice_not_found, or a voice whose
+    # language does not match the definition — say so there and then and do
+    # not continue."*
+    #
+    # A name that resolves to nothing is the cheap failure. The expensive one
+    # is failing on the eleventh of twelve, having already spent on ten, so
+    # every name every planned row needs is resolved first and the batch
+    # refuses as a whole.
+    need = set()
+    for row in rows:
+        if row["variety"] in CAST:
+            a, b = CAST[row["variety"]]
+            need.add(a)
+            if b and row["speakers"] > 1:
+                need.add(b)
+    unresolved = []
+    for name in sorted(need):
+        if not await service.voice_id_for_name(name):
+            unresolved.append(name)
+    if unresolved:
+        print("REFUSING TO RENDER. These cast names do not resolve on this account:")
+        for n in unresolved:
+            print(f"  {n}")
+        print("\nNothing was rendered and nothing was spent. Either the account changed or\n"
+              "the name in CAST is stale — a hard-coded id that goes stale returns\n"
+              "voice_not_found at render time, which is why this cast is names.")
+        return 1
+
+    only = {x.strip() for x in args.only.split(",") if x.strip()}
     manifest, skipped, chars = [], [], 0
     for row in rows:
+        if only and row["id"] not in only:
+            continue
+        # Already rendered and already heard. Skipping is the default because
+        # the alternative is a re-run that quietly doubles the bill and
+        # replaces four files a person has listened to with four nobody has.
+        # Already rendered AND still allowed by the plan. `keep` is what says
+        # so: `gt-l-p4` is rendered and NOT kept, because it was spoken Irish
+        # before Irish was taken out of the bank, and audio that plays
+        # perfectly in a variety the plan forbids is the substitution defect
+        # with our own name on it.
+        if row.get("rendered") and row.get("keep") and not args.redo_rendered and not only:
+            continue
         turns = _turns(row)
         chars += sum(len(t["text"]) for t in turns)
-        first, second = CAST.get(row["variety"], (None, None))
+        if row["variety"] not in CAST:
+            skipped.append((row["id"], f"no cast entry for variety {row['variety']!r}"))
+            continue
+        first, second = CAST[row["variety"]]
+        # A dialogue needs two voices OF ONE VARIETY. Where the account holds
+        # one, the recording is skipped and named — never rendered with a
+        # second speaker of another accent. A missing file is visible; a file
+        # in the wrong variety is not, and it plays perfectly.
+        if row["speakers"] > 1 and second is None:
+            skipped.append((row["id"], f"{row['variety']} has one voice on this account and this is a dialogue"))
+            continue
         ids = {}
         names = {}
         # A monologue has no second speaker. Resolving one anyway put a voice
