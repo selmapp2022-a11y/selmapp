@@ -6,6 +6,7 @@
   "level": "B1",
   "speakers": 2,
   "variety": "australian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part one. You will hear a man enquiring about membership at a community sports centre. First, you have some time to look at questions one to ten.",
   "narratorOutro": "That is the end of Part one.",
   "body": [
@@ -49,6 +50,7 @@
   "level": "B1",
   "speakers": 2,
   "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part one. You will hear a woman telephoning a van hire company. First, you have some time to look at questions one to ten.",
   "narratorOutro": "That is the end of Part one.",
   "body": [
@@ -89,6 +91,7 @@
   "level": "B1",
   "speakers": 2,
   "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part one. You will hear a man enrolling his daughter in swimming lessons. First, you have some time to look at questions one to ten.",
   "narratorOutro": "That is the end of Part one.",
   "body": [
@@ -124,6 +127,7 @@
   "level": "B1",
   "speakers": 2,
   "variety": "north_american",
+  "australiaVariety": "north_american",
   "narratorIntro": "Now turn to Part one. You will hear a man reporting a lost bag at a bus station. First, you have some time to look at questions one to ten.",
   "narratorOutro": "That is the end of Part one.",
   "body": [
@@ -163,6 +167,7 @@
   "level": "B2",
   "speakers": 1,
   "variety": "british",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part two. You will hear a volunteer coordinator showing a new group around the Riverbank Community Garden. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": "That is the end of Part two.",
   "body": [
@@ -191,6 +196,7 @@
   "level": "B2",
   "speakers": 1,
   "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part two. You will hear a librarian briefing a group of new volunteers. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": "That is the end of Part two.",
   "body": [
@@ -217,6 +223,7 @@
   "level": "B2",
   "speakers": 1,
   "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part two. You will hear a warden welcoming new residents to a hall of residence. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": "That is the end of Part two.",
   "body": [
@@ -241,6 +248,7 @@
   "level": "B2",
   "speakers": 1,
   "variety": "new_zealand",
+  "australiaVariety": "new_zealand",
   "narratorIntro": "Now turn to Part two. You will hear a ranger briefing new guides at a wildlife reserve. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": "That is the end of Part two.",
   "body": [
@@ -266,6 +274,7 @@
   "level": "C1",
   "speakers": 2,
   "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part three. You will hear two students, Priya and Sam, discussing a project on urban transport with each other. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": "That is the end of Part three.",
   "body": [
@@ -313,6 +322,7 @@
   "level": "C1",
   "speakers": 1,
   "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part four. You will hear a lecturer talking about urban heat and how cities are responding to it. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": "That is the end of Part four.",
   "body": [
@@ -340,6 +350,7 @@
   "level": "C1",
   "speakers": 2,
   "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part three. You will hear two students, Rachel and Tomás, deciding what to do about an experiment that did not work. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": "That is the end of Part three.",
   "body": [
@@ -381,6 +392,7 @@
   "level": "C1",
   "speakers": 2,
   "variety": "british",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part three. You will hear a student, Nadia, discussing a draft dissertation chapter with her supervisor. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": "That is the end of Part three.",
   "body": [
@@ -420,6 +432,7 @@
   "level": "C1",
   "speakers": 2,
   "variety": "australian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part three. You will hear two students, Callum and Ines, reviewing a group presentation they have just given. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": "That is the end of Part three.",
   "body": [
@@ -466,6 +479,7 @@
   "level": "C1",
   "speakers": 1,
   "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part four. You will hear a lecturer talking about how the seabed is mapped. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": "That is the end of Part four.",
   "body": [
@@ -488,6 +502,7 @@
   "level": "C1",
   "speakers": 1,
   "variety": "north_american",
+  "australiaVariety": "north_american",
   "narratorIntro": "Now turn to Part four. You will hear a lecturer talking about the shipping container. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": "That is the end of Part four.",
   "body": [
@@ -511,6 +526,7 @@
   "level": "C1",
   "speakers": 1,
   "variety": "new_zealand",
+  "australiaVariety": "new_zealand",
   "narratorIntro": "Now turn to Part four. You will hear a lecturer talking about soil compaction on farms. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": "That is the end of Part four.",
   "body": [
@@ -532,7 +548,8 @@
   "keep": true,
   "level": "A2",
   "speakers": 2,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part one. You will hear a man booking a swimming course at a leisure centre. First, you have some time to look at questions one to ten.",
   "narratorOutro": null,
   "body": [
@@ -575,7 +592,8 @@
   "keep": true,
   "level": "A2",
   "speakers": 2,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part one. You will hear a woman returning a faulty kettle to a shop. First, you have some time to look at questions one to ten.",
   "narratorOutro": null,
   "body": [
@@ -619,7 +637,8 @@
   "keep": true,
   "level": "A2",
   "speakers": 2,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part one. You will hear a man joining a public library. First, you have some time to look at questions one to ten.",
   "narratorOutro": null,
   "body": [
@@ -658,7 +677,8 @@
   "keep": true,
   "level": "A2",
   "speakers": 2,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part one. You will hear a woman arranging a repair to a washing machine. First, you have some time to look at questions one to ten.",
   "narratorOutro": null,
   "body": [
@@ -697,7 +717,8 @@
   "keep": true,
   "level": "B1",
   "speakers": 1,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part two. You will hear a woman welcoming new volunteers to a community garden. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": null,
   "body": [
@@ -718,7 +739,8 @@
   "keep": true,
   "level": "B1",
   "speakers": 1,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part two. You will hear a man explaining the arrangements at a residents' car park. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": null,
   "body": [
@@ -739,7 +761,8 @@
   "keep": true,
   "level": "B1",
   "speakers": 1,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part two. You will hear a woman describing a summer activity programme for teenagers. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": null,
   "body": [
@@ -761,7 +784,8 @@
   "keep": true,
   "level": "B1",
   "speakers": 1,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part two. You will hear a man briefing new staff at a hotel on their first morning. First, you have some time to look at questions eleven to twenty.",
   "narratorOutro": null,
   "body": [
@@ -782,7 +806,8 @@
   "keep": true,
   "level": "B2",
   "speakers": 2,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part three. You will hear a student, Owen, discussing a project with his tutor. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": null,
   "body": [
@@ -823,7 +848,8 @@
   "keep": true,
   "level": "B2",
   "speakers": 2,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part three. You will hear a student, Ines, talking to her tutor about a reading list. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": null,
   "body": [
@@ -861,7 +887,8 @@
   "keep": true,
   "level": "B2",
   "speakers": 2,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part three. You will hear a student, Danny, discussing a work placement with his course tutor. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": null,
   "body": [
@@ -902,7 +929,8 @@
   "keep": true,
   "level": "B2",
   "speakers": 2,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part three. You will hear a student, Priya, planning a presentation with her tutor. First, you have some time to look at questions twenty-one to thirty.",
   "narratorOutro": null,
   "body": [
@@ -941,7 +969,8 @@
   "keep": true,
   "level": "C2",
   "speakers": 1,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part four. You will hear part of a lecture on the history of standardised time. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": null,
   "body": [
@@ -961,7 +990,8 @@
   "keep": true,
   "level": "C2",
   "speakers": 1,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part four. You will hear part of a lecture on the economics of seed banks. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": null,
   "body": [
@@ -981,7 +1011,8 @@
   "keep": true,
   "level": "C2",
   "speakers": 1,
-  "variety": "british",
+  "variety": "canadian",
+  "australiaVariety": "british",
   "narratorIntro": "Now turn to Part four. You will hear part of a lecture on the acoustics of concert halls. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": null,
   "body": [
@@ -1001,7 +1032,8 @@
   "keep": true,
   "level": "C2",
   "speakers": 1,
-  "variety": "australian",
+  "variety": "canadian",
+  "australiaVariety": "australian",
   "narratorIntro": "Now turn to Part four. You will hear part of a lecture on the archaeology of roads. First, you have some time to look at questions thirty-one to forty.",
   "narratorOutro": null,
   "body": [
