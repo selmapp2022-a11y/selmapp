@@ -467,5 +467,236 @@
   "speakers": 2,
   "variety": "quebecois",
   "script": "— Vous parlez d'un succès, néanmoins les chiffres que vous citez comparent une année complète à un semestre, ce qui rend la progression flatteuse sans qu'elle soit réelle.\n— La comparaison figure telle quelle dans le document officiel, et je ne fais que la reprendre, sans intention de tromper qui que ce soit.\n— Je vous crois volontiers, cependant reprendre une comparaison fausse ne la rend pas juste, et le document devra être corrigé avant d'être diffusé."
+ },
+ {
+  "id": "tcf-co-68-r",
+  "level": "A1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Attention : le train pour Québec part du quai numéro trois."
+ },
+ {
+  "id": "tcf-co-69-r",
+  "level": "A1",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Tu veux du thé ou du jus ?\n— Du jus, merci."
+ },
+ {
+  "id": "tcf-co-70-r",
+  "level": "A1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Les vélos sont interdits dans le parc."
+ },
+ {
+  "id": "tcf-co-71-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Chers clients, la caisse numéro quatre est maintenant ouverte. Vous pouvez vous y présenter avec vos achats."
+ },
+ {
+  "id": "tcf-co-72-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "L'ascenseur est en panne aujourd'hui. Merci d'utiliser l'escalier situé au fond du couloir."
+ },
+ {
+  "id": "tcf-co-73-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "swiss",
+  "script": "La piscine municipale sera fermée samedi pour le nettoyage annuel. Elle rouvrira dimanche aux heures habituelles."
+ },
+ {
+  "id": "tcf-co-74-r",
+  "level": "A2",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— J'ai réservé une table pour quatre personnes, mais nous serons six.\n— Pas de problème, je vous installe près de la fenêtre."
+ },
+ {
+  "id": "tcf-co-75-r",
+  "level": "A2",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Est-ce que le colis est arrivé ?\n— Pas encore, il devrait être livré demain matin."
+ },
+ {
+  "id": "tcf-co-76-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Le marché a lieu chaque mercredi sur la place centrale. On y trouve surtout des légumes et du fromage."
+ },
+ {
+  "id": "tcf-co-77-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Pour emprunter un livre, il faut présenter sa carte. Le prêt dure trois semaines et peut être prolongé une fois."
+ },
+ {
+  "id": "tcf-co-78-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Notre bureau déménage le mois prochain. La nouvelle adresse se trouve à côté de la gare, au troisième étage."
+ },
+ {
+  "id": "tcf-co-79-r",
+  "level": "A2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Le cours de natation du jeudi est complet. Les personnes intéressées peuvent s'inscrire sur la liste d'attente à l'accueil."
+ },
+ {
+  "id": "tcf-co-80-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Les guichets de cette agence sont en panne. Le personnel reste à l'intérieur pour vous aider. L'agence voisine est à cinq minutes à pied. Elle marche bien."
+ },
+ {
+  "id": "tcf-co-81-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "swiss",
+  "script": "Les travaux de la rue Sainte-Catherine se poursuivent jusqu'à la fin du mois. La circulation reste ouverte dans un seul sens, et les commerces demeurent accessibles à pied par le trottoir nord."
+ },
+ {
+  "id": "tcf-co-82-r",
+  "level": "B1",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— J'hésite entre l'abonnement mensuel et la carte à dix trajets.\n— Si vous voyagez plus de trois fois par semaine, l'abonnement revient moins cher ; sinon la carte suffit largement."
+ },
+ {
+  "id": "tcf-co-83-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Depuis la rentrée, la cantine propose un menu végétarien chaque jour. La mesure devait durer un trimestre, mais la fréquentation a doublé et l'établissement a décidé de la conserver toute l'année."
+ },
+ {
+  "id": "tcf-co-84-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Le service de vélos partagés compte désormais quarante stations. La ville souhaitait en installer soixante, mais le budget voté au printemps n'a permis d'en financer que les deux tiers."
+ },
+ {
+  "id": "tcf-co-85-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Le musée est gratuit le premier dimanche du mois. Ce jour-là, il y a beaucoup de monde. La direction conseille d'arriver tôt. On peut aussi venir un autre jour et payer."
+ },
+ {
+  "id": "tcf-co-86-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "L'entreprise a posé des panneaux solaires sur le toit. Ils couvrent un tiers des besoins du bâtiment. Le reste est acheté au réseau public."
+ },
+ {
+  "id": "tcf-co-87-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Nous informons les voyageurs que le vol de dix-sept heures est reporté à vingt heures, en raison d'une immobilisation technique de l'appareil. Les passagers en correspondance sont invités à se présenter au comptoir, où un nouvel itinéraire leur sera proposé sans frais supplémentaires."
+ },
+ {
+  "id": "tcf-co-88-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "swiss",
+  "script": "À compter du premier octobre, le stationnement devant l'établissement sera réservé aux véhicules de livraison. La réservation vaut entre sept et onze heures. En dehors de cette période, les places restent accessibles, mais la durée maximale autorisée passe de quatre heures à deux."
+ },
+ {
+  "id": "tcf-co-89-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "La direction rappelle que les congés doivent être demandés trois semaines avant la date voulue, sans exception. Une demande tardive, elle, ne sera pas refusée d'office. Elle passera après celles qui respectent le délai, une fois les premières traitées."
+ },
+ {
+  "id": "tcf-co-90-r",
+  "level": "B2",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Le devis a progressé de six cents dollars depuis la première version, sans explication.\n— L'augmentation vient du matériau que vous avez choisi pendant le chantier. Il résiste davantage à l'humidité, mais son prix dépasse largement celui du devis initial."
+ },
+ {
+  "id": "tcf-co-91-r",
+  "level": "B2",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— Vous nous demandez un justificatif de domicile, mais je viens d'emménager et je n'ai encore aucune facture à mon nom.\n— Dans ce cas, une attestation d'hébergement signée par le propriétaire suffit, à condition qu'elle soit accompagnée de sa pièce d'identité."
+ },
+ {
+  "id": "tcf-co-92-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "La commune a remplacé ses lampadaires par des modèles qui s'éteignent au milieu de la nuit. La facture a baissé d'un quart, ce qui était attendu. Ce qui l'était moins, c'est que les plaintes pour bruit nocturne ont diminué elles aussi, sans que personne sache encore l'expliquer."
+ },
+ {
+  "id": "tcf-co-93-r",
+  "level": "C1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Nous rappelons aux détenteurs d'un abonnement annuel que le renouvellement, jusqu'ici automatique, devient une démarche volontaire à partir de janvier. Ceux qui ne se manifesteront pas verront leur accès suspendu sans que cela mette fin à leur compte, lequel restera consultable pendant douze mois. Passé ce délai, seules les données que la loi nous oblige à conserver seront gardées."
+ },
+ {
+  "id": "tcf-co-94-r",
+  "level": "C1",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Vous soutenez que la formation a été suivie par tout le personnel, alors que le relevé de présence ne couvre que les équipes de jour.\n— Les équipes de nuit ont reçu la même formation, mais en ligne, et ce dispositif n'a jamais été intégré au relevé que vous consultez.\n— Admettons ; il reste que rien ne permet aujourd'hui de vérifier qui l'a réellement suivie, ce qui revient au même pour un audit."
+ },
+ {
+  "id": "tcf-co-95-r",
+  "level": "C1",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— Le rapport conclut à une amélioration, cependant il compare la satisfaction déclarée à l'arrivée et celle mesurée six mois plus tard, ce qui n'est pas la même chose.\n— La méthode a été validée par le comité scientifique, et je me garderais de la remettre en cause sur ce seul point.\n— Je ne remets pas la méthode en cause ; je dis que la conclusion va plus loin que ce que la méthode autorise."
+ },
+ {
+  "id": "tcf-co-96-r",
+  "level": "C1",
+  "speakers": 2,
+  "variety": "swiss",
+  "script": "— Nous avons réduit les délais de réponse de moitié, néanmoins les réclamations n'ont pas diminué, et j'avoue que je m'y attendais autrement.\n— Peut-être parce qu'une réponse rapide qui ne règle rien produit une deuxième réclamation, alors qu'une réponse lente mais complète en évite une.\n— C'est possible, toutefois nous n'avons rien qui permette de le montrer, et sans cela nous ne ferons que remplacer une hypothèse par une autre."
+ },
+ {
+  "id": "tcf-co-97-r",
+  "level": "C1",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Vous avez retenu le candidat interne, bien que son dossier soit moins solide sur le plan technique que celui des deux autres.\n— Le poste demande surtout de faire travailler ensemble des services qui ne se parlent pas, et c'est là que son dossier est le plus solide.\n— Je l'entends, cependant il faudra l'expliquer, parce que le jury a été informé d'une grille où la technique pesait le plus lourd."
+ },
+ {
+  "id": "tcf-co-98-r",
+  "level": "C1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "L'établissement a ouvert une salle d'étude accessible jusqu'à minuit. La fréquentation a dépassé les prévisions dès la deuxième semaine, ce qui a été présenté comme un succès. Un relevé plus fin montre pourtant que la moitié des places sont occupées par des étudiants qui viennent y travailler faute de chauffage suffisant chez eux, si bien que la mesure répond à un besoin que personne n'avait cherché à mesurer."
+ },
+ {
+  "id": "tcf-co-99-r",
+  "level": "C2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Le conseil informe les résidents que la révision du règlement intérieur, adoptée en mars, n'entrera en vigueur qu'après notification individuelle, laquelle ne pourra intervenir avant que le procès-verbal soit définitif. Autrement dit, un règlement voté n'est pas pour autant applicable, et toute sanction fondée sur le texte nouveau avant cette notification serait dépourvue de base. Les services ont donc reçu l'instruction de continuer à appliquer l'ancienne version, y compris lorsqu'elle leur paraît moins favorable."
+ },
+ {
+  "id": "tcf-co-100-r",
+  "level": "C2",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Vous présentez cette baisse comme le résultat de votre programme, alors que la même courbe s'observe dans des régions où rien de comparable n'a été entrepris.\n— Je ne prétends pas que nous en soyons la seule cause, néanmoins l'écart avec ces régions s'est creusé depuis deux ans, et cet écart-là, il faut bien l'attribuer à quelque chose.\n— À condition que les deux populations soient comparables, ce dont je doute, puisque la vôtre est plus jeune de six ans en moyenne."
  }
 ]
