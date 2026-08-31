@@ -271,5 +271,201 @@
   "speakers": 1,
   "variety": "quebecois",
   "script": "On célèbre le retour de l'usine comme on célébrerait un fils prodigue. Trois cents emplois, annonce le communiqué ; deux cents, précise la note en bas de page, pour la première année. J'ajoute, sans malice, que la même municipalité expliquait il y a huit ans que l'avenir de la région ne passait plus par l'industrie. Je ne lui reproche pas d'avoir changé d'avis. Je lui reproche de n'avoir jamais changé de ton."
+ },
+ {
+  "id": "tcf-co-56-r",
+  "level": "A1",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Bonjour, je voudrais deux billets pour Montréal.\n— Pour aujourd'hui ou pour demain ?"
+ },
+ {
+  "id": "tcf-co-57-r",
+  "level": "A1",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— Le musée ouvre à quelle heure ?\n— À dix heures, tous les jours."
+ },
+ {
+  "id": "tcf-co-58-r",
+  "level": "A1",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— Vous avez ce manteau en noir ?\n— Oui, mais seulement en petite taille."
+ },
+ {
+  "id": "tcf-co-59-r",
+  "level": "A1",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Où est la station de métro ?\n— Tout droit, puis à gauche."
+ },
+ {
+  "id": "tcf-co-60-r",
+  "level": "A1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Le train pour Ottawa part à huit heures. Il arrive à midi."
+ },
+ {
+  "id": "tcf-co-61-r",
+  "level": "A1",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Aujourd'hui, il fait froid. Mettez un manteau avant de sortir."
+ },
+ {
+  "id": "tcf-co-62-r",
+  "level": "A1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "La cafétéria est fermée le dimanche. Elle ouvre du lundi au samedi."
+ },
+ {
+  "id": "tcf-co-63-r",
+  "level": "A1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Le cours commence à neuf heures. La salle est au premier étage."
+ },
+ {
+  "id": "tcf-co-40-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Mesdames et messieurs, le train pour Québec change de quai. Il partira du quai numéro sept, et non du quai trois. Les voyageurs déjà installés sont priés de se déplacer maintenant. L'heure du départ reste celle qui était annoncée."
+ },
+ {
+  "id": "tcf-co-41-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Chers clients, notre rayon boulangerie ferme exceptionnellement à seize heures. Un nettoyage complet est prévu pendant toute la soirée. Les autres rayons restent accessibles jusqu'à leur horaire habituel. Le pain déjà présenté reste en vente jusqu'à la fermeture."
+ },
+ {
+  "id": "tcf-co-42-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "swiss",
+  "script": "Bonjour, vous êtes bien à la mairie de Sainte-Foy. Nos bureaux sont fermés au public le mercredi après-midi. Pour une demande de passeport, prenez rendez-vous en ligne : nous ne recevons plus sans rendez-vous depuis le mois dernier. Pour tout le reste, présentez-vous directement au guichet."
+ },
+ {
+  "id": "tcf-co-43-r",
+  "level": "B1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Attention, la piscine municipale sera vidée pour entretien complet. Les cours d'aquagym sont annulés du lundi au vendredi. La salle de sport reste accessible, mais temporairement sans vestiaires. Aucun remboursement : la semaine perdue sera ajoutée à la fin."
+ },
+ {
+  "id": "tcf-co-44-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Nous informons notre clientèle que le service de livraison à domicile sera suspendu pendant trois semaines. Il ne s'agit pas d'un arrêt définitif, contrairement à ce que certains ont compris : nous changeons de prestataire, et l'ancien contrat se termine avant que le nouveau ne commence. Les commandes passées d'ici vendredi seront honorées par l'ancien service."
+ },
+ {
+  "id": "tcf-co-45-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Nous informons notre clientèle que le bureau de poste de la rue Sainte-Anne fermera définitivement à la fin du mois, parce que le bail arrive à son terme. Les colis déjà arrivés pourront être retirés jusqu'au dernier jour d'ouverture. Ceux qui arriveront ensuite seront transférés au bureau du boulevard Laurier, sans démarche de votre part."
+ },
+ {
+  "id": "tcf-co-46-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "swiss",
+  "script": "Message aux locataires du bâtiment C : la coupure d'eau prévue jeudi est reportée à mardi prochain, à la même heure. Il ne s'agit pas d'une annulation, car les travaux doivent avoir lieu avant l'hiver et un nouveau report ne serait plus possible. Prévoyez une réserve d'eau pour toute la matinée, puisque le rétablissement peut demander plus de temps que prévu."
+ },
+ {
+  "id": "tcf-co-47-r",
+  "level": "B2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Chers voyageurs, le vol à destination de Montréal est retardé d'environ deux heures. Nous ne connaissons pas encore l'heure exacte du départ, et nous préférons le dire plutôt que d'annoncer un horaire que nous devrions corriger ensuite. Restez dans la zone d'embarquement : l'appel se fera sans préavis."
+ },
+ {
+  "id": "tcf-co-48-r",
+  "level": "C1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Avis aux usagers de la ligne douze. Le service de nuit, qui devait être supprimé au printemps, sera finalement maintenu jusqu'en décembre, puisque la fréquentation observée cet hiver a dépassé les prévisions de la société. Cette prolongation ne préjuge cependant en rien de la décision finale, qui sera prise après une étude complète des coûts. Les horaires affichés en station restent valables."
+ },
+ {
+  "id": "tcf-co-49-r",
+  "level": "C1",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Nous rappelons aux visiteurs que la photographie est permise dans toutes les salles, à une exception près. L'aile des estampes, où la lumière est volontairement réduite, ne s'y prête pas. Il ne s'agit pas des droits, contrairement à ce que l'on croit souvent, mais de la conservation. La lumière des appareils abîme les encres anciennes, lentement, et de façon définitive."
+ },
+ {
+  "id": "tcf-co-50-r",
+  "level": "C1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Information destinée aux nouveaux inscrits, quelle que soit leur filière. Le paiement de la bourse arrive le quinze de chaque mois, sans exception. Le premier versement suit pourtant l'inscription de six semaines, le temps que le dossier soit vérifié. Ne comptez donc pas dessus pour le loyer, ni pour le dépôt de garantie."
+ },
+ {
+  "id": "tcf-co-51-r",
+  "level": "C1",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Chers abonnés, la salle de lecture ouvrira désormais à sept heures, et non plus à neuf. Cette ouverture avancée répond à une demande ancienne, faite depuis plusieurs années. Aucun agent de plus n'accompagne pourtant ce changement, ce qui limite ce qui est possible. Les prêts et les renseignements commenceront donc à neuf heures, comme auparavant."
+ },
+ {
+  "id": "tcf-co-52-r",
+  "level": "C2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Un mot sur la réforme du stationnement, dont l'application était annoncée pour janvier. Le conseil a choisi de la reporter d'un an, non pas qu'il en conteste le principe, mais parce que les habitants des quartiers concernés n'ont pas été consultés dans les formes. Le report portera donc sur la procédure et non sur le fond, et il serait imprudent d'en déduire que le projet est enterré : les tarifs annoncés restent ceux qui s'appliqueront."
+ },
+ {
+  "id": "tcf-co-53-r",
+  "level": "C2",
+  "speakers": 1,
+  "variety": "quebecois",
+  "script": "Avis aux copropriétaires : le ravalement de la façade sud, voté l'an dernier, commencera effectivement au mois d'avril. Le devis retenu n'est pas le moins cher, et le conseil syndical tient à justifier publiquement ce choix, puisque la question a été soulevée en assemblée générale. L'entreprise la moins-disante refusait tout engagement sur les délais, alors que les échafaudages condamneront les balcons pendant toute la durée du chantier. Le surcoût, rapporté aux semaines d'immobilisation évitées, est apparu raisonnable, et l'assemblée l'a approuvé unanimement."
+ },
+ {
+  "id": "tcf-co-54-r",
+  "level": "C2",
+  "speakers": 1,
+  "variety": "swiss",
+  "script": "Nous devons revenir sur l'information diffusée hier concernant la fermeture de l'accueil du soir, qui a été mal comprise. Elle était exacte quant au principe, mais fausse quant à la date, puisque la fermeture prendra effet en septembre et non ce mois-ci. Ce délai supplémentaire laisse le temps d'orienter les familles concernées, quartier par quartier, vers les autres structures du secteur. Nous regrettons cette confusion, d'autant qu'elle a conduit certaines personnes, par précaution, à renoncer à un service encore ouvert."
+ },
+ {
+  "id": "tcf-co-55-r",
+  "level": "C2",
+  "speakers": 1,
+  "variety": "international",
+  "script": "Message aux personnes inscrites sur la liste d'attente du logement social, dont le fonctionnement est souvent mal compris. Le rang que vous consultez en ligne n'est pas, à proprement parler, un classement, et l'interpréter ainsi conduit régulièrement à des déceptions. Il indique une position dans un ensemble, alors que les attributions tiennent compte, en plus, de la composition du ménage et de la taille du logement libéré. Un rang qui recule n'est donc pas nécessairement un mauvais signe, contrairement à ce que beaucoup en concluent hâtivement."
+ },
+ {
+  "id": "tcf-co-64-r",
+  "level": "C2",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Je comprends votre position, mais le rapport que vous invoquez portait sur l'année précédente, alors que la situation du service a changé depuis, et considérablement.\n— C'est justement pour cette raison que je le cite, puisqu'il montre à quel point la dégradation était prévisible, et personne, à l'époque, n'a voulu l'entendre.\n— Prévisible ne veut pas dire inévitable, et présenter les choses ainsi revient à excuser l'inaction plutôt qu'à l'expliquer."
+ },
+ {
+  "id": "tcf-co-65-r",
+  "level": "C2",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— Vous proposez de réduire les délais, mais ce que vous appelez un délai recouvre en réalité deux choses distinctes, et les confondre nous a déjà coûté cher.\n— Je veux bien les distinguer, à condition que l'on ne s'en serve pas ensuite pour justifier l'absence de toute décision, comme la dernière fois.\n— La distinction n'est pas une manœuvre, néanmoins je reconnais qu'elle a servi de prétexte, et c'est précisément ce que je voudrais éviter cette fois."
+ },
+ {
+  "id": "tcf-co-66-r",
+  "level": "C2",
+  "speakers": 2,
+  "variety": "international",
+  "script": "— Le comité a tranché en faveur du site nord, ce qui me surprend, car les objections soulevées en séance portaient sur des points que personne n'a réellement traités.\n— Elles ont été traitées, mais brièvement, et j'admets que la forme a pu donner le sentiment d'un examen expédié.\n— Ce n'est pas une question de forme : une objection à laquelle on répond en trois minutes n'a pas été examinée, elle a été écartée."
+ },
+ {
+  "id": "tcf-co-67-r",
+  "level": "C2",
+  "speakers": 2,
+  "variety": "quebecois",
+  "script": "— Vous parlez d'un succès, néanmoins les chiffres que vous citez comparent une année complète à un semestre, ce qui rend la progression flatteuse sans qu'elle soit réelle.\n— La comparaison figure telle quelle dans le document officiel, et je ne fais que la reprendre, sans intention de tromper qui que ce soit.\n— Je vous crois volontiers, cependant reprendre une comparaison fausse ne la rend pas juste, et le document devra être corrigé avant d'être diffusé."
  }
 ]
